@@ -10,6 +10,7 @@ export type Account = {
   platform: Platform
   name: string
   shopId: string
+  shopName?: string
   sessionId: string
   status: 'online' | 'expired' | 'offline'
   savedAt: string

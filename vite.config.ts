@@ -10,6 +10,14 @@ const { version } = JSON.parse(
 
 export default defineConfig({
   base: './',
+  build: {
+    rollupOptions: {
+      input: {
+        main: path.resolve(import.meta.dirname, 'index.html'),
+        overlay: path.resolve(import.meta.dirname, 'overlay.html'),
+      },
+    },
+  },
   define: { __APP_VERSION__: JSON.stringify(version) },
   plugins: [react(), tailwindcss()],
   resolve: { alias: { '@': path.resolve(import.meta.dirname, './src') } },

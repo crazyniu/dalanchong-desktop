@@ -36,26 +36,16 @@ export function AppShell() {
         className='sticky top-0 h-svh shrink-0 border-r border-border/80'
       >
         <SidebarHeader className='h-24 justify-center px-4'>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                asChild
-                size='lg'
-                className='h-auto hover:bg-transparent'
-              >
-                <Link to='/' className='gap-3'>
-                  <img
-                    src='./brand-transparent.png'
-                    alt=''
-                    className='size-12 object-contain'
-                  />
-                  <span className='text-xl font-semibold tracking-tight'>
-                    大懒虫
-                  </span>
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
+          <div className='flex items-center gap-3 px-2 py-2'>
+            <img
+              src='./brand-transparent.png'
+              alt=''
+              className='size-12 object-contain'
+            />
+            <span className='text-xl font-semibold tracking-tight'>
+              大懒虫
+            </span>
+          </div>
         </SidebarHeader>
         <SidebarContent>
           <SidebarGroup className='px-3 pt-4'>
@@ -81,14 +71,16 @@ export function AppShell() {
             </SidebarMenu>
           </SidebarGroup>
         </SidebarContent>
-        <SidebarFooter className='items-center p-4'>
+        <SidebarFooter className='shrink-0 items-center gap-1 border-t border-border/80 p-4'>
           {!desktop && (
             <Badge variant='outline' className='font-normal'>
               演示数据
             </Badge>
           )}
-          <LicenseStatus />
-          <UpdateStatus />
+          <div className='flex h-8 w-full items-center justify-between gap-2 px-2'>
+            <UpdateStatus />
+            <LicenseStatus />
+          </div>
         </SidebarFooter>
       </Sidebar>
       <SidebarInset className='min-w-0'>

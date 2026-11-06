@@ -1,0 +1,11 @@
+{
+  "identifier": "logs",
+  "webviews": [
+    "logs"
+  ],
+  "permissions": [
+    "core:event:default",
+    "allow-overlay-resize",
+    "allow-overlay-ready"
+  ]
+}

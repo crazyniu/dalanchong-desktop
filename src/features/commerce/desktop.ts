@@ -1,3 +1,5 @@
+import { createDesktopBridge } from '@/desktop-runtime'
+import { isTauri } from '@tauri-apps/api/core'
 import type {
   Account,
   InviteConfig,
@@ -20,6 +22,8 @@ export type RuntimeData = {
   records: InviteRecord[]
   tasks: Record<string, Task>
   collections: CollectionEvent[]
+  accounts?: Account[]
+  configs?: Record<string, InviteConfig>
 }
 export type LicenseState = {
   deviceId: string
@@ -46,7 +50,7 @@ export type UpdateState = {
   error?: string
   canInstall: boolean
 }
-type DesktopEvent =
+export type DesktopEvent =
   | { type: 'update'; state: UpdateState }
   | { type: 'license'; state: LicenseState }
   | { type: 'runtime'; data: RuntimeData }
@@ -70,7 +74,9 @@ declare global {
       prepareAccount: (
         account: Pick<Account, 'id' | 'platform'>
       ) => Promise<void>
-      bindGuest: (accountId: string, guestId: number) => Promise<void>
+      openAccountLogin: (
+        account: Pick<Account, 'id' | 'platform' | 'name'>
+      ) => Promise<void>
       refreshAccount: (accountId: string) => Promise<void>
       removeAccount: (
         accountId: string,
@@ -88,4 +94,7 @@ declare global {
     }
   }
 }
-export const desktop = window.desktop
+export type DesktopBridge = NonNullable<Window['desktop']>
+export const desktop: DesktopBridge | undefined = isTauri()
+  ? createDesktopBridge()
+  : undefined

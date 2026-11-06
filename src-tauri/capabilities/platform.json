@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "platform",
+  "description": "平台页面只允许经 Rust 验证的业务回传",
+  "webviews": [
+    "platform-*",
+    "login-*"
+  ],
+  "remote": {
+    "urls": [
+      "https://cps.kwaixiaodian.com/*",
+      "https://buyin.jinritemai.com/*"
+    ]
+  },
+  "permissions": [
+    "allow-platform-result",
+    "allow-platform-observe"
+  ]
+}

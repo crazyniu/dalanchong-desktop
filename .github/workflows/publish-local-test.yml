@@ -1,0 +1,36 @@
+name: Publish signed local test to Gitee
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Locally verified Mac arm64 test version
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: dalanchong-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: pnpm/setup@v3
+        with:
+          runtime: node@24
+          version: 11.15.1
+          install: false
+      - run: pnpm install --frozen-lockfile
+      - name: Download locally signed draft assets
+        run: gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir dist-release/tauri/darwin/arm64
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+      - run: node scripts/publish-release.mjs --tag "$RELEASE_TAG" --artifacts dist-release/tauri --targets darwin/arm64
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}

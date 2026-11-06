@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { useNavigate } from '@tanstack/react-router'
 import {
   Plus,
   MoreHorizontal,
@@ -49,6 +48,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { browserError } from './browser-session'
 import { desktop } from './desktop'
 import { formatTime } from './format'
 import { Choice, SearchInput, PlatformBadge, NameAvatar } from './shared'
@@ -58,7 +58,6 @@ import type { Platform, Account } from './types'
 
 export function AccountsPage() {
   const store = useCommerce()
-  const navigate = useNavigate()
   const [platform, setPlatform] = useState('all')
   const [query, setQuery] = useState('')
   const [adding, setAdding] = useState(false)
@@ -66,16 +65,31 @@ export function AccountsPage() {
   const [newPlatform, setNewPlatform] = useState<Platform>('kuaishou')
   const [name, setName] = useState('')
   const [loginId, setLoginId] = useState<string | null>(null)
+  const [openingId, setOpeningId] = useState<string | null>(null)
   const [removeId, setRemoveId] = useState<string | null>(null)
   const filtered = store.accounts.filter(
     (a) =>
       (platform === 'all' || a.platform === platform) &&
-      (a.name + a.shopId).includes(query)
+      (a.name + (a.shopName ?? '') + a.shopId).includes(query)
   )
   const loggingIn = store.accounts.find((a) => a.id === loginId)
-  function openAccount(a: Account) {
-    store.selectAccount(a.platform, a.id)
-    navigate({ to: a.platform === 'kuaishou' ? '/kuaishou' : '/douyin' })
+  async function openAccount(a: Account) {
+    if (!desktop) {
+      setLoginId(a.id)
+      return
+    }
+    setOpeningId(a.id)
+    try {
+      await desktop.openAccountLogin({
+        id: a.id,
+        platform: a.platform,
+        name: a.name,
+      })
+    } catch (error) {
+      toast.error(browserError(error))
+    } finally {
+      setOpeningId(null)
+    }
   }
   return (
     <main className='page-content space-y-5'>
@@ -134,7 +148,9 @@ export function AccountsPage() {
                     <div className='space-y-1.5'>
                       <div className='font-medium'>{a.name}</div>
                       <div className='text-sm text-muted-foreground'>
-                        {a.shopId}
+                        {a.shopName && a.shopName !== a.name
+                          ? `${a.shopName} · ${a.shopId}`
+                          : a.shopId}
                       </div>
                     </div>
                   </div>
@@ -171,11 +187,8 @@ export function AccountsPage() {
                     <Button
                       size='sm'
                       variant={a.status === 'online' ? 'outline' : 'secondary'}
-                      onClick={() =>
-                        a.status === 'online' || desktop
-                          ? openAccount(a)
-                          : setLoginId(a.id)
-                      }
+                      disabled={openingId === a.id}
+                      onClick={() => openAccount(a)}
                     >
                       {a.status === 'online' ? '打开' : '登录'}
                       {a.status === 'online' ? <ArrowUpRight /> : <LogIn />}
@@ -192,9 +205,8 @@ export function AccountsPage() {
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align='end'>
                         <DropdownMenuItem
-                          onClick={() =>
-                            desktop ? openAccount(a) : setLoginId(a.id)
-                          }
+                          disabled={openingId === a.id}
+                          onClick={() => openAccount(a)}
                         >
                           <LogIn />
                           重新登录
@@ -240,11 +252,9 @@ export function AccountsPage() {
               e.preventDefault()
               const id = store.addAccount(newPlatform, name.trim())
               setAdding(false)
-              if (desktop)
-                openAccount(
-                  useCommerce.getState().accounts.find((a) => a.id === id)!
-                )
-              else setLoginId(id)
+              void openAccount(
+                useCommerce.getState().accounts.find((a) => a.id === id)!
+              )
             }}
             className='space-y-5'
           >
@@ -292,7 +302,7 @@ export function AccountsPage() {
         onOpenChange={(v) => !v && setLoginId(null)}
       >
         <DialogContent className='sm:max-w-[400px]'>
-          <DialogHeader>
+          <DialogHeader className='sm:text-center'>
             <DialogTitle>账号登录</DialogTitle>
             <DialogDescription className='sr-only'>
               演示账号登录流程

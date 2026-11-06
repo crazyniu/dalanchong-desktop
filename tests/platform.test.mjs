@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import vm from 'node:vm'
-import { makeApi, readQuota, urls } from '../electron/platform.mjs'
+import {
+  classifyObservedRequest,
+  collect,
+  interpretObservedResponse,
+  makeApi,
+  readQuota,
+  urls,
+} from '../src/desktop-runtime/platform.mjs'
 
 const sendPath = '/connection/pc/im/invite/card/send'
 function returnedApi(result, platform = 'douyin') {
@@ -177,4 +184,200 @@ test('missing or invalid quotas fail explicitly instead of returning NaN or trea
     ).remaining,
     0
   )
+})
+
+test('observations accept only platform business endpoints and confirm filters only on successful responses', () => {
+  assert.equal(
+    classifyObservedRequest(
+      'douyin',
+      'https://example.invalid/square_pc_api/square/search_feed_author',
+      '{broken'
+    ),
+    null
+  )
+  assert.equal(
+    classifyObservedRequest(
+      'douyin',
+      'https://buyin.jinritemai.com/analytics',
+      '{broken'
+    ),
+    null
+  )
+  const request = classifyObservedRequest(
+    'douyin',
+    'https://buyin.jinritemai.com/square_pc_api/square/search_feed_author',
+    JSON.stringify({ page: 2, filters: { keyword: '家居' } })
+  )
+  assert.throws(
+    () =>
+      interpretObservedResponse('douyin', request, {
+        code: 10,
+        msg: 'login_required',
+      }),
+    (error) => error.login && error.response.code === 10
+  )
+  assert.throws(
+    () =>
+      interpretObservedResponse('douyin', request, '<html>Bad Gateway</html>', {
+        status: 502,
+      }),
+    /HTTP 502/
+  )
+  const { capture } = interpretObservedResponse('douyin', request, {
+    code: 0,
+    data: { list: [], has_more: false },
+  })
+  assert.equal(capture.body.page, 2)
+  assert.equal(capture.body.filters.keyword, '家居')
+  assert.deepEqual(capture.response.data.list, [])
+  assert.ok(Date.now() - capture.responseAt < 1000)
+})
+
+test('collection reuses only a fresh matching observed page without skipping earlier or later pages', async () => {
+  const pageResult = (page) => ({
+    code: 0,
+    data: {
+      list: [
+        {
+          author_base: {
+            aweme_id: String(page),
+            uid: String(page),
+            nickname: `达人${page}`,
+          },
+        },
+      ],
+      has_more: page < 4,
+    },
+  })
+  const request = classifyObservedRequest(
+    'douyin',
+    'https://buyin.jinritemai.com/square_pc_api/square/search_feed_author',
+    { page: 3, filters: { keyword: '家居' } }
+  )
+  const { capture } = interpretObservedResponse(
+    'douyin',
+    request,
+    pageResult(3)
+  )
+  for (const age of [0, 61_000]) {
+    const calls = []
+    const talents = await collect({
+      platform: 'douyin',
+      capture: { search: { ...capture, responseAt: Date.now() - age } },
+      request: async (_path, body) => {
+        calls.push(body.page)
+        assert.equal(body.filters.keyword, '家居')
+        return pageResult(body.page)
+      },
+      stopped: () => false,
+      progress: async () => {},
+    })
+    assert.deepEqual(calls, age ? [1, 2, 3, 4] : [1, 2, 4])
+    assert.deepEqual(
+      talents.map((t) => t.id),
+      ['1', '2', '3', '4']
+    )
+  }
+  const calls = []
+  const base = 'https://cps.kwaixiaodian.com'
+  const search = classifyObservedRequest(
+    'kuaishou',
+    base + '/gateway/distribute/match/common/orchestration/execute',
+    { scene: 'distribute_peer_seller_list', pageNum: 2, pageSize: 1 }
+  )
+  const promoter = classifyObservedRequest(
+    'kuaishou',
+    base + '/gateway/distribute/pc/common/promoter/list',
+    {
+      sceneCode: 'ps_seller_coop_promoter_list',
+      ext: { sellerId: '2', timeRange: '30d' },
+    }
+  )
+  const shops = (page) => ({
+    result: 1,
+    total: 2,
+    dataList: [{ sellerId: String(page), sellerName: `店铺${page}` }],
+  })
+  const promoters = (id) => ({
+    result: 1,
+    data: { promoterDataInfo: [{ promoterId: id, nickname: `达人${id}` }] },
+  })
+  const talents = await collect({
+    platform: 'kuaishou',
+    capture: {
+      search: interpretObservedResponse('kuaishou', search, shops(2)).capture,
+      promoter: interpretObservedResponse('kuaishou', promoter, promoters('2'))
+        .capture,
+    },
+    request: async (path, body) => {
+      calls.push(path)
+      if (path === search.path) return shops(body.pageNum)
+      assert.equal(body.ext.timeRange, '30d')
+      return promoters(body.ext.sellerId)
+    },
+    stopped: () => false,
+    progress: async () => {},
+  })
+  assert.deepEqual(calls, [search.path, promoter.path])
+  assert.deepEqual(
+    talents.map((t) => t.id),
+    ['1', '2']
+  )
+})
+
+test('observed quota, authenticated identity and product commissions remain scoped to their known response schemas', () => {
+  const identity = classifyObservedRequest(
+    'kuaishou',
+    'https://cps.kwaixiaodian.com/gateway/distribute/match/user/basic/login/info?type=1'
+  )
+  assert.deepEqual(
+    interpretObservedResponse('kuaishou', identity, {
+      result: 1,
+      data: { userInfo: { userId: 'shop-1', userNick: '店铺一' } },
+    }).account,
+    { shopId: 'shop-1', shopName: '店铺一', status: 'online' }
+  )
+  const douyinIdentity = classifyObservedRequest(
+    'douyin',
+    'https://buyin.jinritemai.com/index/getUser'
+  )
+  assert.deepEqual(
+    interpretObservedResponse('douyin', douyinIdentity, {
+      code: 0,
+      data: { shop_id: '0', shop_name: '' },
+    }).account,
+    { status: 'offline' }
+  )
+  assert.deepEqual(
+    interpretObservedResponse('douyin', douyinIdentity, {
+      code: 0,
+      data: { shop_id: 'shop-2', shop_name: '店铺二' },
+    }).account,
+    { shopId: 'shop-2', shopName: '店铺二', status: 'online' }
+  )
+  const quota = classifyObservedRequest(
+    'kuaishou',
+    'https://cps.kwaixiaodian.com/distribute/pc/seller/invite/contact?inviteType=1'
+  )
+  assert.equal(
+    interpretObservedResponse('kuaishou', quota, {
+      result: 1,
+      data: { remainingSendCnt: 12 },
+    }).quota.remaining,
+    12
+  )
+  const product = classifyObservedRequest(
+    'douyin',
+    'https://buyin.jinritemai.com/connection/pc/im/promotion/list?uid=talent-1&query=123'
+  )
+  const items = [
+    { product_id: '123', orient_cos_ratio_detail: { ratio: 1000 } },
+  ]
+  const observed = interpretObservedResponse('douyin', product, {
+    code: 0,
+    data: { promotion_list: items },
+  }).product
+  assert.equal(observed.uid, 'talent-1')
+  assert.equal(observed.query, '123')
+  assert.deepEqual(observed.items, items)
 })

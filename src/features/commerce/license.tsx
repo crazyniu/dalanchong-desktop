@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { Copy, KeyRound, LoaderCircle } from 'lucide-react'
+import { Copy, LoaderCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import { Button } from '@/components/ui/button'
@@ -26,19 +26,47 @@ function errorText(error: unknown) {
   )
 }
 
-function DeviceCode({ value }: { value: string }) {
+function DeviceCode({
+  value,
+  inline = false,
+}: {
+  value: string
+  inline?: boolean
+}) {
   return (
-    <div className='space-y-2'>
-      <span className='text-sm font-medium'>设备码</span>
-      <div className='flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2'>
-        <code className='min-w-0 flex-1 text-sm leading-6 break-all select-all'>
+    <div
+      className={
+        inline ? 'flex items-center justify-between gap-4' : 'space-y-2'
+      }
+    >
+      <span
+        className={
+          inline
+            ? 'shrink-0 text-sm text-muted-foreground'
+            : 'text-sm font-medium'
+        }
+      >
+        设备码
+      </span>
+      <div
+        className={
+          inline
+            ? 'flex min-w-0 items-center gap-2'
+            : 'flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2'
+        }
+      >
+        <code
+          className={`min-w-0 text-sm leading-6 select-all ${inline ? 'whitespace-nowrap' : 'flex-1 break-all'}`}
+        >
           {value}
         </code>
         <Button
           type='button'
           variant='ghost'
           size='icon'
+          className='size-8 shrink-0'
           aria-label='复制设备码'
+          title='复制设备码'
           onClick={async () => {
             try {
               await navigator.clipboard.writeText(value)
@@ -221,7 +249,6 @@ export function LicenseStatus() {
     hour12: false,
     hour: '2-digit',
     minute: '2-digit',
-    second: '2-digit',
   })
   const expiryLabel = expiry ? `${expiryDate} ${expiryTime}` : '永久有效'
   return (
@@ -230,39 +257,30 @@ export function LicenseStatus() {
         <Button
           variant='ghost'
           size='sm'
-          aria-label='授权管理'
+          aria-label={`激活信息，到期时间：${expiryLabel}`}
           title={`到期时间：${expiryLabel}`}
-          className='h-auto w-full justify-between gap-2 px-2 py-2.5'
+          className='h-8 px-0 text-sm font-normal text-muted-foreground tabular-nums hover:bg-transparent'
         >
-          <span className='flex shrink-0 items-center gap-1.5 text-emerald-700'>
-            <KeyRound className='size-4' />
-            <span>已激活</span>
-          </span>
           {state.expiresAt ? (
-            <time
-              dateTime={state.expiresAt}
-              className='flex shrink-0 flex-col items-end text-sm leading-5 font-normal text-muted-foreground tabular-nums'
-            >
-              <span>{expiryDate}</span>
-              <span>{expiryTime}</span>
-            </time>
+            <time dateTime={state.expiresAt}>{expiryDate}</time>
           ) : (
-            <span className='text-sm font-normal text-muted-foreground'>
-              永久有效
-            </span>
+            '永久有效'
           )}
         </Button>
       </DialogTrigger>
-      <DialogContent aria-describedby={undefined} className='sm:max-w-md'>
-        <DialogHeader>
-          <DialogTitle>授权管理</DialogTitle>
+      <DialogContent
+        aria-describedby={undefined}
+        className='gap-0 overflow-hidden p-0 sm:max-w-[520px]'
+      >
+        <DialogHeader className='border-b px-6 py-5'>
+          <DialogTitle>激活信息</DialogTitle>
         </DialogHeader>
-        <div className='space-y-5 py-2'>
-          <div className='space-y-2'>
-            <span className='text-sm font-medium'>到期时间</span>
-            <p className='text-base tabular-nums'>{expiryLabel}</p>
-          </div>
-          <DeviceCode value={state.deviceId} />
+        <div className='space-y-6 px-6 py-5'>
+          <dl className='flex items-center justify-between gap-4 text-sm'>
+            <dt className='text-muted-foreground'>到期时间</dt>
+            <dd className='font-medium tabular-nums'>{expiryLabel}</dd>
+          </dl>
+          <DeviceCode value={state.deviceId} inline />
         </div>
       </DialogContent>
     </Dialog>

@@ -6,38 +6,45 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
-import { stringify } from 'yaml'
 import { prepareRelease } from './prepare-release.mjs'
 
 const GITEE_REPO = 'zhenxiaoguo/dalanchong'
 const GITHUB_REPO = 'crazyniu/dalanchong-desktop'
 const API = `https://gitee.com/api/v5/repos/${GITEE_REPO}`
 
-export function rewriteMetadata(metadata, attachments, notes) {
-  const result = structuredClone(metadata)
-  const download = (name) => {
-    const attachment = attachments.find((a) => a.name === name)
-    if (!attachment?.browser_download_url)
-      throw Error(`Gitee 未返回 ${name} 的下载地址`)
-    const url = new URL(attachment.browser_download_url)
-    if (
-      url.protocol !== 'https:' ||
-      url.hostname !== 'gitee.com' ||
-      url.username ||
-      url.password ||
-      url.searchParams.has('access_token')
-    )
-      throw Error(`Gitee 附件 ${name} 未返回公开稳定的 Gitee 下载地址`)
-    return url.href
+export function attachmentUrl(name, attachments) {
+  const attachment = attachments.find((a) => a.name === name)
+  if (!attachment?.browser_download_url)
+    throw Error(`Gitee 未返回 ${name} 的下载地址`)
+  const url = new URL(attachment.browser_download_url)
+  if (
+    url.protocol !== 'https:' ||
+    url.hostname !== 'gitee.com' ||
+    url.username ||
+    url.password ||
+    url.searchParams.has('access_token')
+  )
+    throw Error(`Gitee 附件 ${name} 未返回公开稳定的下载地址`)
+  return url.href
+}
+export function rewriteMetadata(release, attachments) {
+  return {
+    version: release.version,
+    notes: release.notes,
+    pub_date: new Date().toISOString(),
+    platforms: Object.fromEntries(
+      release.targets.map(({ metadata, assets }) => {
+        const archive = assets.find((a) => a.signature)
+        return [
+          metadata.target,
+          {
+            signature: archive.signature,
+            url: attachmentUrl(archive.name, attachments),
+          },
+        ]
+      })
+    ),
   }
-  result.files = result.files.map((file) => ({
-    ...file,
-    url: download(file.url),
-  }))
-  if (result.path) result.path = download(result.path)
-  result.releaseName = `大懒虫 ${result.version}`
-  result.releaseNotes = notes
-  return result
 }
 
 async function gitee(endpoint, { method = 'GET', json, form } = {}) {
@@ -57,11 +64,7 @@ async function gitee(endpoint, { method = 'GET', json, form } = {}) {
 }
 
 async function verifyAttachment(attachment, asset) {
-  const url = rewriteMetadata(
-    { version: '', files: [{ url: asset.name }] },
-    [attachment],
-    ''
-  ).files[0].url
+  const url = attachmentUrl(asset.name, [attachment])
   const response = await fetch(url)
   if (!response.ok)
     throw Error(`附件 ${asset.name} 无法匿名下载：HTTP ${response.status}`)
@@ -99,9 +102,14 @@ export async function verifyPublishAccess() {
   )
 }
 
-export async function publishRelease({ tag, artifacts, check = false }) {
+export async function publishRelease({
+  tag,
+  artifacts,
+  check = false,
+  requestedTargets,
+}) {
   // All three targets and every attachment are checked before any remote mutation.
-  const release = await prepareRelease({ tag, artifacts })
+  const release = await prepareRelease({ tag, artifacts, requestedTargets })
   if (check) {
     console.log(`${tag} 全量发布预检通过，未发布`)
     return
@@ -148,25 +156,48 @@ export async function publishRelease({ tag, artifacts, check = false }) {
       git('push', 'origin', 'main')
     }
     const assets = release.targets.flatMap((t) => t.assets)
-    gh(
-      'release',
-      'create',
-      tag,
-      '--repo',
-      GITHUB_REPO,
-      '--verify-tag',
-      '--draft',
-      '--title',
-      `大懒虫 ${release.version}`,
-      '--notes-file',
-      release.notesFile
-    )
+    let existing
+    try {
+      existing = JSON.parse(
+        gh('release', 'view', tag, '--repo', GITHUB_REPO, '--json', 'isDraft')
+      )
+    } catch {
+      existing = null
+    }
+    if (existing && !existing.isDraft) throw Error(`${tag} 已发布，不能覆盖`)
+    if (!existing)
+      gh(
+        'release',
+        'create',
+        tag,
+        '--repo',
+        GITHUB_REPO,
+        '--verify-tag',
+        '--draft',
+        '--title',
+        `大懒虫 ${release.version}`,
+        '--notes-file',
+        release.notesFile
+      )
+    else
+      gh(
+        'release',
+        'edit',
+        tag,
+        '--repo',
+        GITHUB_REPO,
+        '--title',
+        `大懒虫 ${release.version}`,
+        '--notes-file',
+        release.notesFile
+      )
     gh(
       'release',
       'upload',
       tag,
       '--repo',
       GITHUB_REPO,
+      '--clobber',
       ...assets.map((a) => a.file)
     )
     const created = await gitee('/releases', {
@@ -192,19 +223,12 @@ export async function publishRelease({ tag, artifacts, check = false }) {
       attachments.push(attachment)
       console.log(`Gitee 附件已核验：${asset.name}`)
     }
-    for (const target of release.targets) {
-      const folder = path.join(checkout, 'updates', target.target)
-      await mkdir(folder, { recursive: true })
-      const metadata = rewriteMetadata(
-        target.metadata,
-        attachments,
-        release.notes
-      )
-      await writeFile(
-        path.join(folder, target.metadataName),
-        stringify(metadata)
-      )
-    }
+    const folder = path.join(checkout, 'updates', 'tauri')
+    await mkdir(folder, { recursive: true })
+    await writeFile(
+      path.join(folder, 'latest.json'),
+      JSON.stringify(rewriteMetadata(release, attachments), null, 2) + '\n'
+    )
     gh('release', 'edit', tag, '--repo', GITHUB_REPO, '--draft=false')
     // One non-forced push exposes all platform metadata together, after all assets work.
     git('add', 'updates')
@@ -223,8 +247,9 @@ if (
   const { values } = parseArgs({
     options: {
       tag: { type: 'string' },
-      artifacts: { type: 'string', default: 'dist-release' },
+      artifacts: { type: 'string', default: 'dist-release/tauri' },
       check: { type: 'boolean', default: false },
+      targets: { type: 'string' },
       'verify-access': { type: 'boolean', default: false },
     },
   })
@@ -234,5 +259,6 @@ if (
       tag: values.tag || process.env.RELEASE_TAG,
       artifacts: values.artifacts,
       check: values.check,
+      requestedTargets: values.targets?.split(','),
     })
 }

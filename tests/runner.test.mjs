@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { prepareInvite } from '../electron/platform.mjs'
+import { prepareInvite } from '../src/desktop-runtime/platform.mjs'
 import {
   alreadyHandled,
   InviteRunner,
   validateConfig,
-} from '../electron/runner.mjs'
+} from '../src/desktop-runtime/runner.mjs'
 
 const config = {
   products: '123',

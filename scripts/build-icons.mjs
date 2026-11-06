@@ -76,3 +76,17 @@ for (const publicDir of [path.join(root, 'public')]) {
   await cp(path.join(icons, 'icon-64.png'), path.join(publicDir, 'favicon.png'))
 }
 console.log('Exported macOS ICNS, Windows ICO, PNG sizes and web branding.')
+
+execFileSync(
+  'pnpm',
+  [
+    'tauri',
+    'icon',
+    path.join(icons, 'icon-256.png'),
+    '-o',
+    path.join(icons, 'tauri'),
+    '-p',
+    '256',
+  ],
+  { cwd: root, stdio: 'inherit' }
+)

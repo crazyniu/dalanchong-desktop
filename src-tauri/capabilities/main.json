@@ -1,0 +1,33 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "本地管理界面事件与窗口能力",
+  "webviews": [
+    "main"
+  ],
+  "permissions": [
+    "core:event:default",
+    "core:window:allow-inner-size",
+    "core:window:allow-scale-factor",
+    "allow-license-state",
+    "allow-license-verify",
+    "allow-license-activate",
+    "allow-runtime-load",
+    "allow-runtime-save",
+    "allow-diagnostic-append",
+    "allow-diagnostic-export",
+    "allow-set-task-state",
+    "allow-update-state",
+    "allow-update-check",
+    "allow-update-download",
+    "allow-update-install",
+    "allow-browser-prepare",
+    "allow-browser-show",
+    "allow-browser-hide",
+    "allow-browser-navigate",
+    "allow-browser-login",
+    "allow-browser-remove",
+    "allow-platform-eval",
+    "allow-overlay-sync"
+  ]
+}

@@ -1,18 +1,11 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from 'react'
-import type { WebviewTag } from 'electron'
+import { useEffect, useLayoutEffect, useRef } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import { Button } from '@/components/ui/button'
 import {
-  guests,
-  urls,
   browserError,
+  listenBrowserEvents,
   retryGuest,
   setGuestState,
   useGuestState,
@@ -25,16 +18,23 @@ type Bounds = { left: number; top: number; width: number; height: number }
 const useBrowser = create<{
   active: string
   visited: string[]
+  prepared: Record<string, number>
+  covered: boolean
   bounds: Bounds
 }>(() => ({
   active: '',
   visited: [],
+  prepared: {},
+  covered: false,
   bounds: { left: 0, top: 0, width: 0, height: 0 },
 }))
+
 export function BrowserHost({ account }: { account: Account }) {
   const ref = useRef<HTMLDivElement>(null)
   const state = useGuestState((s) => s.sessions[account.id])
   useLayoutEffect(() => {
+    const host = ref.current!
+    const workspace = host.closest('[data-testid="platform-workspace"]')!
     useBrowser.setState((s) => ({
       active: account.id,
       visited: s.visited.includes(account.id)
@@ -42,19 +42,37 @@ export function BrowserHost({ account }: { account: Account }) {
         : [...s.visited, account.id],
     }))
     const measure = () => {
-      const r = ref.current!.getBoundingClientRect()
-      useBrowser.setState({
-        bounds: { left: r.left, top: r.top, width: r.width, height: r.height },
-      })
+      const r = host.getBoundingClientRect()
+      const bounds = {
+        left: r.left,
+        top: r.top,
+        width: r.width,
+        height: r.height,
+      }
+      const previous = useBrowser.getState().bounds
+      if (
+        bounds.left !== previous.left ||
+        bounds.top !== previous.top ||
+        bounds.width !== previous.width ||
+        bounds.height !== previous.height
+      ) {
+        useBrowser.setState({ bounds })
+      }
     }
     const observer = new ResizeObserver(measure)
-    observer.observe(ref.current!)
+    observer.observe(host)
+    const mutations = new MutationObserver(measure)
+    mutations.observe(workspace, { childList: true, subtree: true })
+    window.addEventListener('resize', measure)
     window.addEventListener('scroll', measure, true)
     measure()
     return () => {
       observer.disconnect()
+      mutations.disconnect()
+      window.removeEventListener('resize', measure)
       window.removeEventListener('scroll', measure, true)
       useBrowser.setState({ active: '' })
+      presentBrowser()
     }
   }, [account.id])
   return (
@@ -70,36 +88,40 @@ export function BrowserHost({ account }: { account: Account }) {
     </div>
   )
 }
-function PlatformGuest({
-  account,
-  active,
-  bounds,
-}: {
-  account: Account
-  active: boolean
-  bounds: Bounds
-}) {
-  const ref = useRef<WebviewTag>(null)
+
+const preparations = new Map<
+  string,
+  { attempt: number; promise: Promise<void> }
+>()
+function PlatformGuest({ account }: { account: Account }) {
   const attempt = useGuestState((s) => s.attempts[account.id] || 0)
-  const attachGuest = useCallback(
-    (element: WebviewTag | null) => {
-      ref.current = element
-      if (!element) return
-      // Set the native attribute before navigation; React drops unknown boolean attributes.
-      element.setAttribute('allowpopups', '')
-      element.src = urls[account.platform]
-    },
-    [account.platform]
-  )
-  const [preparedAttempt, setPreparedAttempt] = useState<number | null>(null)
-  const ready = preparedAttempt === attempt
   useEffect(() => {
     let mounted = true
-    setGuestState(account.id, { status: 'loading' })
-    desktop!
-      .prepareAccount({ id: account.id, platform: account.platform })
+    let preparation = preparations.get(account.id)
+    if (preparation?.attempt !== attempt) {
+      if (attempt > 0 || !useGuestState.getState().sessions[account.id]) {
+        setGuestState(account.id, { status: 'loading' })
+      }
+      const promise = listenBrowserEvents()
+        .then(() =>
+          desktop!.prepareAccount({
+            id: account.id,
+            platform: account.platform,
+          })
+        )
+        .then(async () => {
+          if (attempt > 0)
+            await invoke('browser_navigate', { accountId: account.id })
+        })
+      preparation = { attempt, promise }
+      preparations.set(account.id, preparation)
+    }
+    preparation.promise
       .then(() => {
-        if (mounted) setPreparedAttempt(attempt)
+        if (!mounted) return
+        useBrowser.setState((s) => ({
+          prepared: { ...s.prepared, [account.id]: attempt },
+        }))
       })
       .catch((e) => {
         if (!mounted) return
@@ -111,103 +133,88 @@ function PlatformGuest({
       mounted = false
     }
   }, [account.id, account.platform, attempt])
-  useEffect(() => {
-    if (!ready) return
-    const element = ref.current!
-    let navigation = 0
-    const bind = async () => {
-      const current = navigation
-      try {
-        await desktop!.bindGuest(account.id, element.getWebContentsId())
-        if (navigation !== current) return
-        guests.set(account.id, element)
-        setGuestState(account.id, { status: 'ready' })
-      } catch (e) {
-        if (navigation !== current) return
-        const error = browserError(e)
-        setGuestState(account.id, { status: 'error', error })
-        toast.error(error)
-      }
-    }
-    const loading = (event: Event) => {
-      const e = event as Event & { isMainFrame: boolean; isInPlace: boolean }
-      if (e.isMainFrame && !e.isInPlace) {
-        navigation++
-        guests.delete(account.id)
-        setGuestState(account.id, { status: 'loading' })
-      }
-    }
-    const fail = (event: Event) => {
-      const e = event as Event & {
-        errorCode: number
-        isMainFrame: boolean
-        errorDescription: string
-      }
-      if (e.isMainFrame && e.errorCode !== -3) {
-        navigation++
-        guests.delete(account.id)
-        setGuestState(account.id, {
-          status: 'error',
-          error: `网页加载失败：${e.errorDescription}`,
-        })
-        toast.error(`网页加载失败：${e.errorDescription}`)
-      }
-    }
-    const gone = () => {
-      navigation++
-      guests.delete(account.id)
-      setGuestState(account.id, {
-        status: 'error',
-        error: '网页已关闭，请重新打开',
-      })
-    }
-    element.addEventListener('dom-ready', bind)
-    element.addEventListener('did-start-navigation', loading)
-    element.addEventListener('did-fail-load', fail)
-    element.addEventListener('render-process-gone', gone)
-    return () => {
-      navigation++
-      element.removeEventListener('dom-ready', bind)
-      element.removeEventListener('did-start-navigation', loading)
-      element.removeEventListener('did-fail-load', fail)
-      element.removeEventListener('render-process-gone', gone)
-      guests.delete(account.id)
-    }
-  }, [ready, account.id, attempt])
-  if (!ready) return null
-  return (
-    <webview
-      key={attempt}
-      ref={attachGuest}
-      partition={account.sessionId}
-      webpreferences='contextIsolation=yes,sandbox=yes,backgroundThrottling=no'
-      style={{
-        position: 'fixed',
-        zIndex: 10,
-        ...bounds,
-        display: active ? 'flex' : 'none',
-        background: '#fff',
-      }}
-      aria-label={`${account.name}平台网页`}
-    />
-  )
+  return null
 }
+
+// Serialize native visibility changes so a slow show cannot outlive a later hide.
+let presentation = Promise.resolve()
+let presentationRevision = 0
+function presentBrowser(accountId?: string, bounds?: Bounds) {
+  const revision = ++presentationRevision
+  presentation = presentation
+    .then(async () => {
+      if (revision !== presentationRevision) return
+      if (accountId) await invoke('browser_show', { accountId, bounds })
+      else await invoke('browser_hide')
+      const task = accountId
+        ? useCommerce.getState().tasks[accountId]
+        : undefined
+      const logs =
+        task?.kind === 'collect' &&
+        task.logs?.some((entry) => entry.level === 'error')
+      await invoke('overlay_sync', {
+        accountId: logs ? accountId : null,
+        bounds: logs ? bounds : null,
+        task: logs ? task : null,
+      })
+    })
+    .catch((e) => {
+      if (revision !== presentationRevision) return
+      const error = browserError(e)
+      if (accountId) setGuestState(accountId, { status: 'error', error })
+      toast.error(error)
+    })
+}
+
+const coveringLayers = [
+  'dialog-content',
+  'sheet-content',
+  'alert-dialog-content',
+  'dropdown-menu-content',
+  'select-content',
+  'popover-content',
+]
+  .map((slot) => `[data-slot="${slot}"]`)
+  .join(',')
+
 export function BrowserLayer() {
   const state = useBrowser()
   const accounts = useCommerce((s) => s.accounts)
+  const task = useCommerce((s) => s.tasks[state.active])
+  const session = useGuestState((s) => s.sessions[state.active])
+  const attempt = useGuestState((s) => s.attempts[state.active] || 0)
+  useLayoutEffect(() => {
+    if (!desktop) return
+    const checkLayers = () => {
+      // Keep the page hidden through Radix's closing animation as well.
+      const covered = Boolean(document.querySelector(coveringLayers))
+      if (covered !== useBrowser.getState().covered) {
+        useBrowser.setState({ covered })
+        if (covered) presentBrowser()
+      }
+    }
+    const observer = new MutationObserver(checkLayers)
+    observer.observe(document.body, { childList: true, subtree: true })
+    checkLayers()
+    return () => {
+      observer.disconnect()
+      presentBrowser()
+    }
+  }, [])
+  useLayoutEffect(() => {
+    if (!desktop) return
+    const visible =
+      state.active &&
+      accounts.some((a) => a.id === state.active) &&
+      state.prepared[state.active] === attempt &&
+      !state.covered &&
+      session?.status !== 'error' &&
+      state.bounds.width > 0 &&
+      state.bounds.height > 0
+    presentBrowser(visible ? state.active : undefined, state.bounds)
+  }, [state, accounts, session?.status, attempt, task])
   if (!desktop) return null
-  return (
-    <>
-      {accounts
-        .filter((a) => state.visited.includes(a.id))
-        .map((account) => (
-          <PlatformGuest
-            key={account.id}
-            account={account}
-            active={state.active === account.id}
-            bounds={state.bounds}
-          />
-        ))}
-    </>
-  )
+  return accounts
+    .filter((a) => state.visited.includes(a.id))
+    .map((account) => <PlatformGuest key={account.id} account={account} />)
 }

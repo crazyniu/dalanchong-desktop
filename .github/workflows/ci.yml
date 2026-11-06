@@ -18,5 +18,12 @@ jobs:
           install: false
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
-      - run: pnpm test:core && pnpm test:license && pnpm test:update && pnpm test:scripts
+      - run: pnpm test:core && pnpm test:scripts
       - run: pnpm build
+
+  native:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml

@@ -1,0 +1,57 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "大懒虫",
+  "version": "../package.json",
+  "identifier": "com.local.ecommerceassistant",
+  "build": {
+    "beforeDevCommand": "pnpm dev --port 1420",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [],
+    "macOSPrivateApi": true,
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:1420 ws://127.0.0.1:1420; object-src 'none'; base-uri 'self'",
+      "capabilities": [
+        "main",
+        "platform",
+        "logs"
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "createUpdaterArtifacts": true,
+    "category": "Business",
+    "icon": [
+      "../assets/icons/tauri/256x256.png",
+      "../assets/icons/app.icns",
+      "../assets/icons/app.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "14.0"
+    },
+    "windows": {
+      "nsis": {
+        "languages": [
+          "SimpChinese"
+        ],
+        "displayLanguageSelector": false
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE1NUE3NTg3OTM3NjM4RDAKUldUUU9IYVRoM1ZhcGNhRmJpVFdQamVjRkZXall1dXZFUGszbzJYazhRUkhKKzlDZ014aHQ3MXcK",
+      "endpoints": [
+        "https://gitee.com/zhenxiaoguo/dalanchong/raw/main/updates/tauri/latest.json"
+      ]
+    }
+  }
+}

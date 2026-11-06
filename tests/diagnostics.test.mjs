@@ -72,7 +72,8 @@ test('runtime restores errors, limits displayed history and sends redacted diagn
   assert.equal(displayed.data.logs[0].id, 'old-1')
   assert.deepEqual(displayed.data.logs.at(-1), entry)
   assert.ok(
-    commands.indexOf('diagnostic_append') < commands.indexOf('diagnostic_export')
+    commands.indexOf('diagnostic_append') <
+      commands.indexOf('diagnostic_export')
   )
 })
 

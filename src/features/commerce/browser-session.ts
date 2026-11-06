@@ -1,13 +1,19 @@
-import type { WebviewTag } from 'electron'
+import { invoke } from '@tauri-apps/api/core'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { toast } from 'sonner'
 import { create } from 'zustand'
-import { useCommerce } from './store'
+import { desktop } from './desktop'
 
-export const urls = {
-  kuaishou: 'https://cps.kwaixiaodian.com/zone/daren-match/peer-reference',
-  douyin: 'https://buyin.jinritemai.com/dashboard/servicehall/daren-square',
+export type BrowserEvent = {
+  accountId: string
+  type: 'navigation' | 'ready' | 'error' | 'response'
+  source: string
+  workspace: boolean
+  url?: string
+  error?: string
+  request?: unknown
+  response?: unknown
 }
-export const guests = new Map<string, WebviewTag>()
 type GuestState = { status: 'loading' | 'ready' | 'error'; error?: string }
 export const useGuestState = create<{
   sessions: Record<string, GuestState>
@@ -23,33 +29,42 @@ export function retryGuest(id: string) {
   }))
 }
 export function browserError(error: unknown) {
-  return (error as Error).message.replace(
-    /^Error invoking remote method '[^']+': (?:Error: )?/,
-    ''
-  )
+  return error instanceof Error ? error.message : String(error)
 }
-export async function reloadPlatform(id: string): Promise<boolean> {
-  const guest = guests.get(id)
-  if (!guest) {
-    retryGuest(id)
-    return false
-  }
+
+let browserEvents: Promise<UnlistenFn> | undefined
+export function listenBrowserEvents() {
+  browserEvents ??= listen<BrowserEvent>('assistant:browser', ({ payload }) => {
+    if (!payload.workspace || payload.request) return
+    const { accountId, type, error } = payload
+    if (type === 'navigation') setGuestState(accountId, { status: 'loading' })
+    if (type === 'ready') setGuestState(accountId, { status: 'ready' })
+    if (type === 'error') {
+      setGuestState(accountId, { status: 'error', error })
+      toast.error(error)
+    }
+  })
+  return browserEvents
+}
+if (desktop)
+  void listenBrowserEvents().catch((error) => toast.error(browserError(error)))
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    void browserEvents?.then((unlisten) => unlisten())
+  })
+}
+
+export async function reloadPlatform(accountId: string): Promise<boolean> {
+  if (!desktop) return true
+  setGuestState(accountId, { status: 'loading' })
   try {
-    await guest.loadURL(
-      urls[useCommerce.getState().accounts.find((a) => a.id === id)!.platform]
-    )
+    await listenBrowserEvents()
+    await invoke('browser_navigate', { accountId })
     return true
   } catch (error) {
-    const e = error as Error & { code?: string; errno?: number }
-    if (
-      e.code === 'ERR_ABORTED' ||
-      e.errno === -3 ||
-      e.message.includes('ERR_ABORTED')
-    ) {
-      toast.info('页面正在跳转，请加载完成后重试')
-    } else {
-      toast.error(`网页跳转失败：${browserError(e)}`)
-    }
+    const message = browserError(error)
+    setGuestState(accountId, { status: 'error', error: message })
+    toast.error(`网页跳转失败：${message}`)
     return false
   }
 }

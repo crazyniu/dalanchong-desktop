@@ -64,7 +64,7 @@ export function InvitePage({ platform }: { platform: Platform }) {
     .map((a) => ({ account: a, task: store.tasks[a.id] }))
     .filter((x) => x.task && x.task.kind !== 'collect')
   async function collect() {
-    if (!pageReady) return
+    if (!pageReady || (desktop && !store.captured[browserAccount.id])) return
     setStarting(true)
     try {
       if (desktop) await desktop.collect(browserAccount.id)
@@ -205,6 +205,7 @@ export function InvitePage({ platform }: { platform: Platform }) {
                     disabled={
                       !collecting &&
                       (!pageReady ||
+                        (desktop && !store.captured[browserAccount.id]) ||
                         browserAccount.status !== 'online' ||
                         starting ||
                         collectionTask?.status === 'running')
@@ -226,7 +227,9 @@ export function InvitePage({ platform }: { platform: Platform }) {
                           : '正在加载网页'
                         : starting
                           ? '正在启动'
-                          : '开始采集'}
+                          : desktop && !store.captured[browserAccount.id]
+                            ? '等待网页筛选'
+                            : '开始采集'}
                   </Button>
                 )
               )}

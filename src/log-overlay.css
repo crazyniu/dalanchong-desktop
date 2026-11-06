@@ -1,0 +1,4 @@
+#root > [data-testid='collection-log'] {
+  width: 440px;
+  max-width: none;
+}

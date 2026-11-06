@@ -8,7 +8,7 @@ web
 
 ## Stack
 
-React + TypeScript + Vite，沿用 satnaing/shadcn-admin 的组件和后台布局；Electron 承载平台网页。
+React + TypeScript + Vite，沿用 satnaing/shadcn-admin 的组件和后台布局；Tauri 2 系统 WebView 承载平台网页。
 
 ## Users
 

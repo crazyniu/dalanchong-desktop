@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import Markdown from 'react-markdown'
 import {
   Check,
   Download,
@@ -37,15 +38,26 @@ export function UpdateStatus() {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState<UpdateAction | null>(null)
   const [lastAction, setLastAction] = useState<UpdateAction>('check')
+  const promptedVersion = useRef<string | undefined>(undefined)
 
   useEffect(() => {
     if (!desktop) return
+    function receiveState(next: UpdateState) {
+      setState(next)
+      if (
+        next.status === 'available' &&
+        next.version !== promptedVersion.current
+      ) {
+        promptedVersion.current = next.version
+        setOpen(true)
+      }
+    }
     const unsubscribe = desktop.onEvent((event) => {
-      if (event.type === 'update') setState(event.state)
+      if (event.type === 'update') receiveState(event.state)
     })
     desktop
       .getUpdateState()
-      .then(setState)
+      .then(receiveState)
       .catch((error) => {
         setState((current) => ({
           ...current,
@@ -120,26 +132,23 @@ export function UpdateStatus() {
 
   return (
     <>
-      <div className='flex w-full items-center justify-between gap-2 px-2'>
-        <span className='text-sm text-muted-foreground tabular-nums'>
-          v{__APP_VERSION__}
-        </span>
-        <Button
-          variant='ghost'
-          size='sm'
-          className={`h-8 px-0 text-sm font-normal hover:bg-transparent ${available || downloaded ? 'text-emerald-700 hover:text-emerald-800' : 'text-muted-foreground'}`}
-          onClick={showUpdates}
-        >
-          {footerLabel}
-        </Button>
-      </div>
+      <Button
+        variant='ghost'
+        size='sm'
+        aria-label={`检查更新，当前版本 ${__APP_VERSION__}`}
+        title={footerLabel}
+        className={`h-8 px-0 text-sm font-normal tabular-nums hover:bg-transparent ${available || downloaded ? 'text-emerald-700 hover:text-emerald-800' : 'text-muted-foreground'}`}
+        onClick={showUpdates}
+      >
+        v{__APP_VERSION__}
+      </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
           aria-describedby={undefined}
           className='max-h-[85vh] overflow-y-auto sm:max-w-[480px]'
         >
           <DialogHeader>
-            <DialogTitle>软件更新</DialogTitle>
+            <DialogTitle>{available ? '发现新版本' : '软件更新'}</DialogTitle>
           </DialogHeader>
           <div className='space-y-5 py-2'>
             <dl className='grid grid-cols-[auto_1fr] gap-x-6 gap-y-3 text-sm'>
@@ -181,8 +190,8 @@ export function UpdateStatus() {
                 {state.releaseNotes && (
                   <section className='space-y-2'>
                     <h3 className='text-sm font-medium'>更新内容</h3>
-                    <div className='max-h-64 overflow-y-auto rounded-lg border bg-muted/30 p-3 text-sm leading-6 break-words whitespace-pre-wrap'>
-                      {state.releaseNotes}
+                    <div className='max-h-64 space-y-3 overflow-y-auto rounded-lg border bg-muted/30 p-3 text-sm leading-6 break-words [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold [&_li]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5'>
+                      <Markdown skipHtml>{state.releaseNotes}</Markdown>
                     </div>
                   </section>
                 )}
