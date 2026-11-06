@@ -2,3 +2,8 @@
   width: 440px;
   max-width: none;
 }
+
+#root > [data-slot='invite-progress'] {
+  width: 380px;
+  max-width: none;
+}

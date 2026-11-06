@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import Markdown from 'react-markdown'
 import {
   Check,
   Download,
@@ -7,6 +6,7 @@ import {
   RefreshCw,
   RotateCw,
 } from 'lucide-react'
+import Markdown from 'react-markdown'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -120,7 +120,7 @@ export function UpdateStatus() {
   const available = state.status === 'available'
   const downloaded = state.status === 'downloaded'
   const percent = Math.round(state.percent ?? 0)
-  const footerLabel = available
+  const updateLabel = available
     ? '发现新版本'
     : downloaded
       ? '重启安装'
@@ -136,11 +136,17 @@ export function UpdateStatus() {
         variant='ghost'
         size='sm'
         aria-label={`检查更新，当前版本 ${__APP_VERSION__}`}
-        title={footerLabel}
-        className={`h-8 px-0 text-sm font-normal tabular-nums hover:bg-transparent ${available || downloaded ? 'text-emerald-700 hover:text-emerald-800' : 'text-muted-foreground'}`}
+        title={updateLabel}
+        className={`h-6 justify-start gap-2 px-0 text-sm font-normal tabular-nums hover:bg-transparent ${available || downloaded ? 'text-emerald-700 hover:text-emerald-800' : 'text-muted-foreground hover:text-foreground'}`}
         onClick={showUpdates}
       >
         v{__APP_VERSION__}
+        {(available || downloaded) && (
+          <span
+            className='size-1.5 rounded-full bg-emerald-600'
+            aria-label={updateLabel}
+          />
+        )}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent

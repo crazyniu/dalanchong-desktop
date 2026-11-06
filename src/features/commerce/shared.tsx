@@ -87,15 +87,17 @@ export function Choice({
   options,
   label,
   className,
+  disabled,
 }: {
   value: string
   onChange: (value: string) => void
   options: { value: string; label: string }[]
   label: string
   className?: string
+  disabled?: boolean
 }) {
   return (
-    <Select value={value} onValueChange={onChange}>
+    <Select value={value} onValueChange={onChange} disabled={disabled}>
       <SelectTrigger
         aria-label={label}
         className={cn('min-w-32 bg-white', className)}
@@ -140,19 +142,34 @@ export function Pagination({
   page,
   pages,
   total,
+  pageSize,
   onChange,
+  onPageSizeChange,
 }: {
   page: number
   pages: number
   total: number
+  pageSize: number
   onChange: (page: number) => void
+  onPageSizeChange: (pageSize: number) => void
 }) {
   return (
-    <div className='flex items-center justify-between py-3 text-sm'>
-      <span className='text-muted-foreground'>
-        共 {total.toLocaleString()} 条
-      </span>
+    <div className='flex shrink-0 flex-wrap items-center justify-between gap-3 py-3 text-sm'>
       <div className='flex items-center gap-3'>
+        <span className='text-muted-foreground'>
+          共 {total.toLocaleString()} 条
+        </span>
+        <Choice
+          label='每页数量'
+          value={String(pageSize)}
+          onChange={(value) => onPageSizeChange(Number(value))}
+          options={[10, 20, 50, 100].map((size) => ({
+            value: String(size),
+            label: `${size} 条 / 页`,
+          }))}
+        />
+      </div>
+      <div className='flex flex-wrap items-center gap-3'>
         <span className='tabular-nums'>
           {page} / {Math.max(1, pages)}
         </span>
@@ -176,6 +193,30 @@ export function Pagination({
         >
           <ChevronRight />
         </Button>
+        <form
+          className='flex items-center gap-2'
+          onSubmit={(event) => {
+            event.preventDefault()
+            onChange(Number(new FormData(event.currentTarget).get('page')))
+          }}
+        >
+          <Input
+            key={`${page}-${pageSize}`}
+            name='page'
+            type='number'
+            aria-label='跳转页码'
+            min={1}
+            max={Math.max(1, pages)}
+            step={1}
+            required
+            defaultValue={page}
+            disabled={!total}
+            className='h-8 w-20 bg-white tabular-nums'
+          />
+          <Button type='submit' size='sm' variant='outline' disabled={!total}>
+            跳转
+          </Button>
+        </form>
       </div>
     </div>
   )

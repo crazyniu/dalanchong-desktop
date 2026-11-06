@@ -71,11 +71,21 @@ declare global {
       ) => Promise<{ valid: boolean; message?: string }>
       initialize: () => Promise<RuntimeData>
       exportLogs: () => Promise<boolean>
+      clearLogs: (
+        platform: Account['platform'] | 'all',
+        accountId: string
+      ) => Promise<void>
+      clearTalents: (
+        platform: Account['platform'],
+        ids?: string[]
+      ) => Promise<void>
+      clearRecords: (ids: string[]) => Promise<void>
       prepareAccount: (
         account: Pick<Account, 'id' | 'platform'>
       ) => Promise<void>
       openAccountLogin: (
-        account: Pick<Account, 'id' | 'platform' | 'name'>
+        account: Pick<Account, 'id' | 'platform' | 'name'>,
+        closeOnLogin?: boolean
       ) => Promise<void>
       refreshAccount: (accountId: string) => Promise<void>
       removeAccount: (

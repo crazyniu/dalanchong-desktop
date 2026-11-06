@@ -191,6 +191,7 @@ export function createRuntime(
   const refresh = async (id, force = true) => {
     const c = connections.get(id)
     if (!c) throw Error('请先打开该账号的邀约网页')
+    if (!c.ready) return
     if (new URL(c.url).origin !== new URL(urls[c.platform]).origin) return
     if (!force && Date.now() - c.quotaAt < 30_000) return
     if (c.refresh) return c.refresh
@@ -206,6 +207,12 @@ export function createRuntime(
         )
           onQuota(id, quota)
       } catch (error) {
+        if (
+          connections.get(id) !== c ||
+          revision !== c.identityRevision ||
+          quotaOrder !== c.latest.get('quota')
+        )
+          return
         if (error.login) expireAccount(c, error.message)
         else send({ type: 'account', id, patch: { quotaError: error.message } })
         throw error
@@ -223,6 +230,7 @@ export function createRuntime(
     if (event.type === 'navigation') {
       if (event.workspace) {
         c.ready = false
+        c.identityRevision++
         clearCapture(c)
         c.latest.delete('search')
         c.latest.delete('promoter')
@@ -233,9 +241,9 @@ export function createRuntime(
       if (event.workspace) {
         c.ready = true
         if (licenseValid)
-          void refresh(c.id, false).catch((error) =>
-            report('刷新账号失败', error, c.id)
-          )
+          void (c.refresh || Promise.resolve())
+            .then(() => refresh(c.id, false))
+            .catch((error) => report('刷新账号失败', error, c.id))
       }
       return
     }
@@ -293,12 +301,13 @@ export function createRuntime(
       if (result.quota) onQuota(c.id, result.quota)
       if (result.account) {
         c.identityOrder = request.order
+        // A confirmed identity supersedes quota requests from the previous session.
+        c.identityRevision++
         const changed =
           c.shopId &&
           result.account.shopId &&
           c.shopId !== result.account.shopId
         if (changed || result.account.status !== 'online') {
-          c.identityRevision++
           c.latest.delete('search')
           c.latest.delete('promoter')
           c.quotaAt = 0
@@ -315,8 +324,20 @@ export function createRuntime(
           }
         }
         if (result.account.shopId) c.shopId = result.account.shopId
-        send({ type: 'account', id: c.id, patch: result.account })
-        if (result.account.status === 'online' && c.ready)
+        const online = result.account.status === 'online'
+        send({
+          type: 'account',
+          id: c.id,
+          patch: { ...result.account, ...(online ? { quotaError: '' } : {}) },
+        })
+        if (online && !event.workspace && c.closeOnLogin) {
+          c.closeOnLogin = false
+          c.ready = false
+          c.quotaAt = 0
+          void call('browser_finish_login', { accountId: c.id })
+            .then(() => save())
+            .catch((error) => report('完成账号登录失败', error, c.id))
+        } else if (online && c.ready)
           void (c.refresh || Promise.resolve())
             .then(() => refresh(c.id, false))
             .catch((error) => report('刷新账号失败', error, c.id))
@@ -343,6 +364,8 @@ export function createRuntime(
               .catch((error) => report('停止任务失败', error, id))
       }
       send(payload)
+      if (payload.type === 'account' && data)
+        void save().catch((error) => report('保存账号失败', error, payload.id))
     }),
     listen('assistant:browser', ({ payload }) => observe(payload)),
   ])
@@ -464,6 +487,7 @@ export function createRuntime(
           quotaAt: 0,
           shopId: '',
           refresh: null,
+          closeOnLogin: false,
         }
         connections.set(account.id, c)
         send({
@@ -520,15 +544,85 @@ export function createRuntime(
         await logChain
         return call('diagnostic_export')
       }),
+    clearLogs: (platform, accountId) =>
+      action('清空日志失败', async () => {
+        await initialize()
+        await requireLicense()
+        const before = new Date().toISOString()
+        const matches = (log) =>
+          log.time <= before &&
+          (platform === 'all' || !log.platform || log.platform === platform) &&
+          (accountId === 'all' || log.accountId === accountId)
+        const pending = logChain.then(() =>
+          call('diagnostic_clear', {
+            platform: platform === 'all' ? null : platform,
+            accountId: accountId === 'all' ? null : accountId,
+            before,
+          })
+        )
+        logChain = pending.catch(() => {})
+        await pending
+        data.logs = data.logs.filter((log) => !matches(log))
+        const accounts = preferences().accounts || data.accounts || []
+        for (const [id, task] of Object.entries(data.tasks)) {
+          if (
+            (accountId === 'all' || id === accountId) &&
+            (platform === 'all' ||
+              accounts.find((a) => a.id === id)?.platform === platform)
+          ) {
+            task.logs = (task.logs || []).filter((log) => log.time > before)
+          }
+        }
+        await save()
+        emit()
+      }),
+    clearTalents: (platform, ids) =>
+      action('删除采集达人失败', async () => {
+        await initialize()
+        await requireLicense()
+        if ([...runner.jobs.values()].some((job) => job.platform === platform))
+          throw Error('请先停止此平台的采集或邀约任务')
+        const selected = new Set(ids)
+        data.talents = data.talents.filter(
+          (talent) =>
+            talent.platform !== platform ||
+            (ids !== undefined && !selected.has(talent.id))
+        )
+        await save()
+        emit()
+      }),
+    clearRecords: (ids) =>
+      action('清空邀约记录失败', async () => {
+        await initialize()
+        await requireLicense()
+        const selected = new Set(ids)
+        if (
+          data.records.some(
+            (record) =>
+              selected.has(record.id) && runner.jobs.has(record.accountId)
+          )
+        )
+          throw Error('请先停止相关账号的任务')
+        data.records = data.records.filter((record) => !selected.has(record.id))
+        await save()
+        emit()
+      }),
     prepareAccount,
-    openAccountLogin: (account) =>
+    openAccountLogin: (account, closeOnLogin = true) =>
       action(
         '打开登录窗口失败',
         async () => {
           await prepareAccount(account)
           if (runner.jobs.has(account.id))
             throw Error('请先停止该账号的任务，再打开登录窗口')
-          await call('browser_login', { account })
+          const c = connections.get(account.id)
+          c.closeOnLogin = closeOnLogin
+          try {
+            await call('browser_login', { account })
+          } catch (error) {
+            c.closeOnLogin = false
+            throw error
+          }
         },
         account.id
       ),

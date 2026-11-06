@@ -149,10 +149,44 @@ textarea {
 .detail-list dd {
   overflow-wrap: anywhere;
 }
-[data-testid='platform-workspace'] {
-  height: calc(100vh - 61px);
-  max-height: calc(100vh - 61px);
-  min-height: 480px;
+.collection-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.floating-toolbar {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  width: calc(100% - 32px);
+  max-width: 1100px;
+  transform: translateX(-50%);
+  z-index: 40;
+  container-type: inline-size;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 6px 24px rgb(15 23 42 / 18%);
+}
+.toolbar-account {
+  max-width: 160px;
+}
+.toolbar-progress {
+  max-width: 160px;
+}
+@container (max-width: 1050px) {
+  .toolbar-progress {
+    display: none;
+  }
+}
+@container (max-width: 900px) {
+  .toolbar-secondary-label {
+    display: none;
+  }
+  .toolbar-account {
+    max-width: 128px;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   *,

@@ -3,6 +3,7 @@ mod cookies;
 mod license;
 mod overlay;
 mod storage;
+mod toolbar;
 mod update;
 
 use std::{collections::HashSet, path::PathBuf, sync::Mutex};
@@ -52,11 +53,12 @@ async fn set_task_state(
     let tasks = app.state::<Tasks>();
     let mut tasks = tasks.0.lock().unwrap();
     if running {
-        tasks.insert(account_id);
+        tasks.insert(account_id.clone());
     } else {
         tasks.remove(&account_id);
     }
-    Ok(())
+    drop(tasks);
+    browser::set_busy(&app, &account_id, running)
 }
 
 pub fn run() {
@@ -66,6 +68,7 @@ pub fn run() {
         .manage(Tasks::default())
         .manage(cookies::CookieStore::default())
         .manage(overlay::Overlay::default())
+        .manage(toolbar::Toolbar::default())
         .manage(browser::BrowserState::default())
         .manage(storage::Storage::default())
         .setup(|app| {
@@ -97,10 +100,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             license::license_state, license::license_verify, license::license_activate,
-            storage::runtime_load, storage::runtime_save, storage::diagnostic_append, storage::diagnostic_export,
-            set_task_state, overlay::overlay_ready, overlay::overlay_sync, overlay::overlay_resize,
+            storage::runtime_load, storage::runtime_save, storage::diagnostic_append, storage::diagnostic_export, storage::diagnostic_clear,
+            set_task_state, overlay::overlay_ready, overlay::overlay_sync, overlay::overlay_resize, overlay::overlay_action,
+            toolbar::toolbar_ready, toolbar::toolbar_sync, toolbar::toolbar_resize, toolbar::toolbar_action,
             browser::browser_prepare, browser::browser_show, browser::browser_hide, browser::browser_navigate,
-            browser::browser_login, browser::browser_remove, browser::platform_eval, browser::platform_result, browser::platform_observe,
+            browser::browser_login, browser::browser_finish_login, browser::browser_remove, browser::platform_eval, browser::platform_result, browser::platform_observe,
             update::update_state, update::update_check, update::update_download, update::update_install,
         ])
         .build(tauri::generate_context!())

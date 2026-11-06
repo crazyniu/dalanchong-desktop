@@ -26,7 +26,10 @@ export function validateConfig(platform, config) {
     config.interval > 60000
   )
     throw Error('请求间隔为 500–60000 毫秒')
-  if (!Number.isSafeInteger(config.maxInvites) || config.maxInvites < 1)
+  if (
+    config.maxInvites != null &&
+    (!Number.isSafeInteger(config.maxInvites) || config.maxInvites < 1)
+  )
     throw Error('本次邀约上限须为正整数')
 }
 
@@ -274,6 +277,7 @@ export class InviteRunner {
   }
   async run(accountId, platform, config, api, queue, task, job) {
     const request = pacedRequest(api, config.interval, job)
+    const maxInvites = config.maxInvites ?? Infinity
     try {
       let quota = await readQuota(request, platform)
       this.onQuota(accountId, quota)
@@ -287,11 +291,7 @@ export class InviteRunner {
               .slice(0, 5)
           : []
       for (const candidate of queue) {
-        if (
-          job.stopped ||
-          task.success >= config.maxInvites ||
-          quota.remaining === 0
-        )
+        if (job.stopped || task.success >= maxInvites || quota.remaining === 0)
           break
         task.current = candidate.name
         const record = {
@@ -393,7 +393,7 @@ export class InviteRunner {
             : '已停止'
         : quota.remaining === 0
           ? '额度已用完'
-          : task.success >= config.maxInvites
+          : task.success >= maxInvites
             ? '已达到本次邀约上限'
             : '本次邀约已完成'
     } catch (error) {

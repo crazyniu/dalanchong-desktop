@@ -15,6 +15,7 @@ export default defineConfig({
       input: {
         main: path.resolve(import.meta.dirname, 'index.html'),
         overlay: path.resolve(import.meta.dirname, 'overlay.html'),
+        toolbar: path.resolve(import.meta.dirname, 'toolbar.html'),
       },
     },
   },

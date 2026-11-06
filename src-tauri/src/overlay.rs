@@ -1,14 +1,14 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Webview, WebviewUrl};
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Bounds {
-    left: f64,
-    top: f64,
-    width: f64,
-    height: f64,
+    pub(crate) left: f64,
+    pub(crate) top: f64,
+    pub(crate) width: f64,
+    pub(crate) height: f64,
 }
 #[derive(Default)]
 pub struct Overlay(pub Mutex<Option<(String, Bounds, Value)>>);
@@ -56,6 +56,7 @@ pub async fn overlay_sync(
         let builder =
             tauri::webview::WebviewBuilder::new("logs", WebviewUrl::App("overlay.html".into()))
                 .transparent(true)
+                .focused(false)
                 .on_navigation(|url| {
                     matches!(
                         url.host_str(),
@@ -131,4 +132,23 @@ pub fn overlay_ready(app: AppHandle, webview: Webview) -> Result<Option<Value>, 
         .unwrap()
         .as_ref()
         .map(|v| v.2.clone()))
+}
+
+#[tauri::command]
+pub fn overlay_action(app: AppHandle, webview: Webview, action: Value) -> Result<(), String> {
+    if webview.label() != "logs" {
+        return Err("此页面无权操作任务浮层".into());
+    }
+    let state = app.state::<Overlay>();
+    let current = state.0.lock().unwrap();
+    if let Some((_, _, content)) = current.as_ref() {
+        // The overlay only forwards UI actions; the main UI owns task operations.
+        app.emit_to(
+            "main",
+            "assistant:invite-progress-action",
+            json!({ "platform": content["platform"], "action": action }),
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }

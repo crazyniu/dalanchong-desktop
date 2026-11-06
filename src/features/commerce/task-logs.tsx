@@ -18,6 +18,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { ClearDataButton } from './clear-data-button'
 import { desktop } from './desktop'
 import { exportRecords } from './format'
 import { Choice, Pagination } from './shared'
@@ -69,10 +70,12 @@ export function TaskLogsDialog({
 }) {
   const logs = useCommerce((s) => s.logs) ?? []
   const accounts = useCommerce((s) => s.accounts)
-  const [platform, setPlatform] = useState<string>(initialPlatform)
+  const clearLogs = useCommerce((s) => s.clearLogs)
+  const [platform, setPlatform] = useState<Platform | 'all'>(initialPlatform)
   const [accountId, setAccountId] = useState('all')
   const [expanded, setExpanded] = useState<string | null>(null)
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [exporting, setExporting] = useState(false)
   const filtered = logs
     .filter(
@@ -82,8 +85,9 @@ export function TaskLogsDialog({
         (accountId === 'all' || log.accountId === accountId)
     )
     .reverse()
-  const pages = Math.ceil(filtered.length / 20)
+  const pages = Math.ceil(filtered.length / pageSize)
   const current = Math.min(page, Math.max(1, pages))
+  const displayed = filtered.slice((current - 1) * pageSize, current * pageSize)
   async function exportLogs() {
     setExporting(true)
     try {
@@ -131,7 +135,7 @@ export function TaskLogsDialog({
             label='日志平台'
             value={platform}
             onChange={(value) => {
-              setPlatform(value)
+              setPlatform(value as Platform | 'all')
               setAccountId('all')
               setPage(1)
             }}
@@ -166,6 +170,16 @@ export function TaskLogsDialog({
             <Download />
             {exporting ? '正在导出' : '导出日志'}
           </Button>
+          <ClearDataButton
+            label='清空日志'
+            description='清空当前平台与账号范围的全部日志，无法恢复。'
+            disabled={!desktop && !filtered.length}
+            onClear={async () => {
+              await clearLogs(platform, accountId)
+              setExpanded(null)
+              setPage(1)
+            }}
+          />
         </div>
         <div className='min-h-0 flex-1 overflow-y-auto rounded-lg border'>
           <Table>
@@ -179,7 +193,7 @@ export function TaskLogsDialog({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filtered.slice((current - 1) * 20, current * 20).map((log) => (
+              {displayed.map((log) => (
                 <Fragment key={log.id}>
                   <TableRow className='align-top'>
                     <TableCell className='whitespace-nowrap text-muted-foreground tabular-nums'>
@@ -257,7 +271,12 @@ export function TaskLogsDialog({
           page={current}
           pages={pages}
           total={filtered.length}
+          pageSize={pageSize}
           onChange={setPage}
+          onPageSizeChange={(size) => {
+            setPageSize(size)
+            setPage(1)
+          }}
         />
       </DialogContent>
     </Dialog>

@@ -1,5 +1,5 @@
 use serde_json::{json, Value};
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 use tauri::{AppHandle, Emitter, Manager, Webview};
 use tokio::sync::Mutex;
 
@@ -8,7 +8,7 @@ const API: &str = "https://lfrgswefkgdzhureqzod.supabase.co/functions/v1/license
 pub struct LicenseService {
     state: Value,
     code: String,
-    credential: keyring::Entry,
+    file: PathBuf,
     client: reqwest::Client,
 }
 
@@ -42,12 +42,7 @@ impl License {
         };
         crate::storage::write_json(&file, &saved)?;
         let device_id = saved["deviceId"].as_str().ok_or("设备标识无效")?;
-        let credential = keyring::Entry::new("com.local.ecommerceassistant.license", device_id)?;
-        let code = match credential.get_password() {
-            Ok(code) => code,
-            Err(keyring::Error::NoEntry) => String::new(),
-            Err(error) => return Err(error.into()),
-        };
+        let code = saved["code"].as_str().unwrap_or("").to_string();
         let state = json!({
             "valid":false,"reason":"not_activated","message":"",
             "deviceId":device_id,"hasCode":!code.is_empty(),
@@ -56,7 +51,7 @@ impl License {
         Ok(Self(Mutex::new(LicenseService {
             state,
             code,
-            credential,
+            file,
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(15))
                 .build()?,
@@ -163,10 +158,11 @@ pub async fn license_activate(
         }
         return Ok(response);
     }
-    license
-        .credential
-        .set_password(&code)
-        .map_err(|e| e.to_string())?;
+    crate::storage::write_json(
+        &license.file,
+        &json!({"deviceId": license.state["deviceId"], "code": code}),
+    )
+    .map_err(|e| e.to_string())?;
     license.code = code;
     license.publish(&app, result);
     Ok(json!({"valid":true}))

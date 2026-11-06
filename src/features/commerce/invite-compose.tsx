@@ -1,19 +1,7 @@
 import { useState } from 'react'
-import {
-  ChevronDown,
-  LogIn,
-  Play,
-  RotateCw,
-  Settings2,
-  Square,
-} from 'lucide-react'
+import { LogIn, Play, RotateCw, Square } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
@@ -101,11 +89,16 @@ export function InviteCompose({
     if (
       !Number.isInteger(config.interval) ||
       config.interval < 500 ||
-      config.interval > 60000 ||
-      !Number.isInteger(config.maxInvites) ||
-      config.maxInvites < 1
+      config.interval > 60000
     ) {
-      setError('邀约上限须为正整数，间隔为 500–60000 毫秒')
+      setError('间隔为 500–60000 毫秒')
+      return
+    }
+    if (
+      config.maxInvites != null &&
+      (!Number.isSafeInteger(config.maxInvites) || config.maxInvites < 1)
+    ) {
+      setError('最大邀约数须为正整数，留空不限制')
       return
     }
     setError('')
@@ -145,7 +138,7 @@ export function InviteCompose({
       <SheetContent className='gap-0 sm:max-w-[460px]'>
         <SheetHeader className='border-b p-6'>
           <SheetTitle>
-            邀约所选达人{' '}
+            邀约达人{' '}
             <Badge variant='secondary' className='ml-2'>
               {selectedIds.length} 位
             </Badge>
@@ -159,6 +152,7 @@ export function InviteCompose({
             <Label>发送账号</Label>
             <Choice
               label='发送账号'
+              disabled={starting}
               value={accountId}
               onChange={(id) => {
                 onAccountChange(id)
@@ -235,7 +229,7 @@ export function InviteCompose({
               placeholder='每行一个商品 ID'
               rows={3}
               className='h-24 resize-y'
-              disabled={running}
+              disabled={running || starting}
               onChange={(e) => save({ products: e.target.value })}
             />
           </div>
@@ -253,7 +247,7 @@ export function InviteCompose({
               value={config.message}
               rows={4}
               className='min-h-28 resize-none leading-6'
-              disabled={running}
+              disabled={running || starting}
               onChange={(e) => save({ message: e.target.value })}
             />
           </div>
@@ -266,7 +260,7 @@ export function InviteCompose({
                 placeholder={
                   platform === 'kuaishou' ? '留空使用后台手机号' : '填写手机号'
                 }
-                disabled={running}
+                disabled={running || starting}
                 onChange={(e) => save({ phone: e.target.value })}
               />
             </div>
@@ -278,51 +272,44 @@ export function InviteCompose({
                 placeholder={
                   platform === 'kuaishou' ? '留空使用后台微信号' : '填写微信号'
                 }
-                disabled={running}
+                disabled={running || starting}
                 onChange={(e) => save({ wechat: e.target.value })}
               />
             </div>
           </div>
-          <Collapsible>
-            <CollapsibleTrigger asChild>
-              <Button
-                variant='ghost'
-                className='w-full justify-between px-0 text-muted-foreground'
-              >
-                <span className='flex items-center gap-2'>
-                  <Settings2 />
-                  发送设置
-                </span>
-                <ChevronDown />
-              </Button>
-            </CollapsibleTrigger>
-            <CollapsibleContent className='grid grid-cols-2 gap-3 pt-3'>
-              <div className='space-y-2'>
-                <Label htmlFor='invite-limit'>本次邀约上限</Label>
-                <Input
-                  id='invite-limit'
-                  type='number'
-                  min={1}
-                  value={config.maxInvites}
-                  disabled={running}
-                  onChange={(e) => save({ maxInvites: Number(e.target.value) })}
-                />
-              </div>
-              <div className='space-y-2'>
-                <Label htmlFor='invite-interval'>间隔（毫秒）</Label>
-                <Input
-                  id='invite-interval'
-                  type='number'
-                  min={500}
-                  max={60000}
-                  value={config.interval}
-                  disabled={running}
-                  onChange={(e) => save({ interval: Number(e.target.value) })}
-                />
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
-          {task && (task.kind !== 'collect' || running) && (
+          <div className='grid grid-cols-2 gap-3'>
+            <div className='space-y-2'>
+              <Label htmlFor='invite-limit'>最大邀约数</Label>
+              <Input
+                id='invite-limit'
+                type='number'
+                min={1}
+                step={1}
+                value={config.maxInvites ?? ''}
+                placeholder='不限制'
+                disabled={running || starting}
+                onChange={(e) =>
+                  save({
+                    maxInvites:
+                      e.target.value === '' ? null : Number(e.target.value),
+                  })
+                }
+              />
+            </div>
+            <div className='space-y-2'>
+              <Label htmlFor='invite-interval'>间隔（毫秒）</Label>
+              <Input
+                id='invite-interval'
+                type='number'
+                min={500}
+                max={60000}
+                value={config.interval}
+                disabled={running || starting}
+                onChange={(e) => save({ interval: Number(e.target.value) })}
+              />
+            </div>
+          </div>
+          {task && running && (
             <div className='space-y-3 rounded-lg border p-4'>
               <div className='flex justify-between text-sm'>
                 <span>
@@ -385,7 +372,7 @@ export function InviteCompose({
                       ? '刷新额度后重试'
                       : account.quota === 0
                         ? '额度已用完'
-                        : `开始邀约 ${Math.min(selectedIds.length, config.maxInvites)} 位`}
+                        : `开始邀约 ${Math.min(selectedIds.length, config.maxInvites ?? selectedIds.length)} 位`}
           </Button>
         </SheetFooter>
       </SheetContent>

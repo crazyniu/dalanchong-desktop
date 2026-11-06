@@ -42,9 +42,12 @@ export function AppShell() {
               alt=''
               className='size-12 object-contain'
             />
-            <span className='text-xl font-semibold tracking-tight'>
-              大懒虫
-            </span>
+            <div className='min-w-0 flex-1'>
+              <span className='block text-xl font-semibold tracking-tight'>
+                大懒虫
+              </span>
+              <UpdateStatus />
+            </div>
           </div>
         </SidebarHeader>
         <SidebarContent>
@@ -71,16 +74,13 @@ export function AppShell() {
             </SidebarMenu>
           </SidebarGroup>
         </SidebarContent>
-        <SidebarFooter className='shrink-0 items-center gap-1 border-t border-border/80 p-4'>
+        <SidebarFooter className='shrink-0 gap-2 p-4'>
           {!desktop && (
             <Badge variant='outline' className='font-normal'>
               演示数据
             </Badge>
           )}
-          <div className='flex h-8 w-full items-center justify-between gap-2 px-2'>
-            <UpdateStatus />
-            <LicenseStatus />
-          </div>
+          <LicenseStatus />
         </SidebarFooter>
       </Sidebar>
       <SidebarInset className='min-w-0'>

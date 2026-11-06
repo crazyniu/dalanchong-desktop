@@ -1,0 +1,11 @@
+{
+  "identifier": "toolbar",
+  "webviews": ["toolbar"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-toolbar-ready",
+    "allow-toolbar-resize",
+    "allow-toolbar-action"
+  ]
+}

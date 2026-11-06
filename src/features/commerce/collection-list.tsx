@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { Download, ListFilter, Send, UsersRound } from 'lucide-react'
+import { Download, ListFilter, RotateCcw, Send, UsersRound } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
 import {
   Table,
   TableBody,
@@ -11,6 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { ClearDataButton } from './clear-data-button'
 import { exportRecords, formatTime } from './format'
 import {
   Choice,
@@ -20,7 +22,12 @@ import {
   SearchInput,
 } from './shared'
 import { useCommerce } from './store'
-import { statusNames, type CollectedTalent, type Platform } from './types'
+import {
+  platformNames,
+  statusNames,
+  type CollectedTalent,
+  type Platform,
+} from './types'
 
 export function CollectionList({
   platform,
@@ -34,15 +41,23 @@ export function CollectionList({
   talents: CollectedTalent[]
   selected: string[]
   onSelect: (ids: string[]) => void
-  onInvite: () => void
+  onInvite: (ids: string[]) => void
   onCollect: () => void
 }) {
   const accounts = useCommerce((s) => s.accounts)
   const records = useCommerce((s) => s.records)
+  const clearTalents = useCommerce((s) => s.clearTalents)
+  const tasks = useCommerce((s) => s.tasks)
+  const running = accounts.some(
+    (a) => a.platform === platform && tasks[a.id]?.status === 'running'
+  )
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all')
   const [resultAccount, setResultAccount] = useState('all')
+  const [minFans, setMinFans] = useState('')
+  const [maxFans, setMaxFans] = useState('')
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const result = (id: string) =>
     records.find(
       (r) =>
@@ -50,14 +65,25 @@ export function CollectionList({
         r.talentId === id &&
         (resultAccount === 'all' || r.accountId === resultAccount)
     )
-  const filtered = talents.filter(
-    (t) =>
-      (t.name + t.id + t.source).includes(query) &&
-      (status === 'all' || (result(t.id)?.status || 'pending') === status)
-  )
-  const pages = Math.ceil(filtered.length / 8)
+  const filtered = talents
+    .filter(
+      (t) =>
+        (t.name + t.id + t.source).includes(query) &&
+        (status === 'all' || (result(t.id)?.status || 'pending') === status) &&
+        (minFans === '' ||
+          (t.fans !== undefined && t.fans >= Number(minFans))) &&
+        (maxFans === '' || (t.fans !== undefined && t.fans <= Number(maxFans)))
+    )
+    .sort((a, b) => Date.parse(b.collectedAt) - Date.parse(a.collectedAt))
+  const hasSelection = selected.length > 0
+  const actionTalents = hasSelection
+    ? talents
+        .filter((t) => selected.includes(t.id))
+        .sort((a, b) => Date.parse(b.collectedAt) - Date.parse(a.collectedAt))
+    : filtered
+  const pages = Math.ceil(filtered.length / pageSize)
   const current = Math.min(page, Math.max(1, pages))
-  const displayed = filtered.slice((current - 1) * 8, current * 8)
+  const displayed = filtered.slice((current - 1) * pageSize, current * pageSize)
   const allSelected =
     displayed.length > 0 && displayed.every((t) => selected.includes(t.id))
   const anySelected = displayed.some((t) => selected.includes(t.id))
@@ -69,7 +95,7 @@ export function CollectionList({
     )
   return (
     <div className='space-y-4 p-6'>
-      <div className='flex flex-wrap items-center gap-3'>
+      <div className='flex flex-wrap items-center gap-2'>
         <SearchInput
           value={query}
           onChange={(v) => {
@@ -77,10 +103,11 @@ export function CollectionList({
             setPage(1)
           }}
           placeholder='搜索达人、ID、来源'
-          className='w-60'
+          className='min-w-40 flex-1'
         />
         <Choice
           label='列表邀约状态'
+          className='w-28 min-w-0'
           value={status}
           onChange={(v) => {
             setStatus(v)
@@ -97,6 +124,7 @@ export function CollectionList({
         />
         <Choice
           label='查看账号邀约状态'
+          className='w-36 min-w-0'
           value={resultAccount}
           onChange={(v) => {
             setResultAccount(v)
@@ -109,50 +137,107 @@ export function CollectionList({
               .map((a) => ({ value: a.id, label: a.name })),
           ]}
         />
-        <Button
-          className='ml-auto'
-          variant='outline'
-          disabled={!filtered.length}
-          onClick={() =>
-            exportRecords(
-              filtered.map((t) => ({
-                达人: t.name,
-                达人ID: t.id,
-                粉丝数: t.fans ?? '',
-                来源: t.source,
-                采集账号:
-                  accounts.find((a) => a.id === t.sourceAccountId)?.name ||
-                  '已移除账号',
-                采集时间: formatTime(t.collectedAt),
-              })),
-              '采集达人.csv'
-            )
-          }
-        >
-          <Download />
-          导出
-        </Button>
-      </div>
-      <div className='flex min-h-10 items-center gap-3'>
-        <span className='font-medium'>已采集 {talents.length} 位达人</span>
-        {selected.length > 0 && (
-          <>
-            <Badge variant='secondary'>已选 {selected.length} 位</Badge>
-            <Button size='sm' variant='ghost' onClick={() => onSelect([])}>
-              取消选择
+        <div className='flex shrink-0 items-center gap-2'>
+          <span className='text-sm whitespace-nowrap'>粉丝数</span>
+          <Input
+            type='number'
+            min={0}
+            step={1}
+            aria-label='粉丝下限'
+            placeholder='最低'
+            value={minFans}
+            onChange={(event) => {
+              setMinFans(event.target.value)
+              setPage(1)
+            }}
+            className='w-24 bg-white'
+          />
+          <span className='text-muted-foreground'>至</span>
+          <Input
+            type='number'
+            min={0}
+            step={1}
+            aria-label='粉丝上限'
+            placeholder='最高'
+            value={maxFans}
+            onChange={(event) => {
+              setMaxFans(event.target.value)
+              setPage(1)
+            }}
+            className='w-24 bg-white'
+          />
+          {(minFans !== '' || maxFans !== '') && (
+            <Button
+              size='icon'
+              variant='ghost'
+              aria-label='重置粉丝筛选'
+              title='重置粉丝筛选'
+              onClick={() => {
+                setMinFans('')
+                setMaxFans('')
+                setPage(1)
+              }}
+            >
+              <RotateCcw />
             </Button>
-          </>
-        )}
-        <Button
-          className='ml-auto'
-          onClick={onInvite}
-          disabled={!selected.length}
-        >
-          <Send />
-          邀约所选{selected.length ? ` ${selected.length}` : ''}
-        </Button>
+          )}
+        </div>
+        <div className='ml-auto flex shrink-0 items-center gap-2'>
+          <Button
+            onClick={() => onInvite(actionTalents.map((t) => t.id))}
+            disabled={!actionTalents.length}
+          >
+            <Send />
+            {hasSelection ? '邀约所选' : '批量邀约'}
+          </Button>
+          <Button
+            variant='outline'
+            disabled={!actionTalents.length}
+            onClick={() =>
+              exportRecords(
+                actionTalents.map((t) => ({
+                  达人: t.name,
+                  达人ID: t.id,
+                  粉丝数: t.fans ?? '',
+                  来源: t.source,
+                  采集账号:
+                    accounts.find((a) => a.id === t.sourceAccountId)?.name ||
+                    '已移除账号',
+                  采集时间: formatTime(t.collectedAt),
+                })),
+                '采集达人.csv'
+              )
+            }
+          >
+            <Download />
+            {hasSelection ? '导出所选' : '全部导出'}
+          </Button>
+          <ClearDataButton
+            label={hasSelection ? '删除所选' : '全部删除'}
+            actionLabel='删除'
+            description={
+              hasSelection
+                ? `删除已勾选的 ${selected.length} 位达人，包含其他页和筛选外的已选达人，无法恢复。`
+                : `删除${platformNames[platform]}全部 ${talents.length} 位已采集达人，包含筛选外的数据，无法恢复。`
+            }
+            disabled={!talents.length || running}
+            onClear={async () => {
+              await clearTalents(platform, hasSelection ? selected : undefined)
+              onSelect([])
+              setPage(1)
+            }}
+          />
+        </div>
       </div>
-      <div className='rounded-lg border bg-white'>
+      {hasSelection && (
+        <div className='flex items-center gap-2'>
+          <Badge variant='secondary'>已选 {selected.length} 位</Badge>
+          <Button size='sm' variant='ghost' onClick={() => onSelect([])}>
+            取消选择
+          </Button>
+        </div>
+      )}
+      <div className='max-h-[50vh] overflow-y-auto rounded-lg border bg-white'>
         <Table>
           <TableHeader>
             <TableRow>
@@ -265,7 +350,12 @@ export function CollectionList({
         page={current}
         pages={pages}
         total={filtered.length}
+        pageSize={pageSize}
         onChange={setPage}
+        onPageSizeChange={(size) => {
+          setPageSize(size)
+          setPage(1)
+        }}
       />
     </div>
   )

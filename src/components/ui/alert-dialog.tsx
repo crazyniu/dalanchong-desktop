@@ -55,6 +55,7 @@ function AlertDialogContent({
           className
         )}
         {...props}
+        onEscapeKeyDown={(event) => event.preventDefault()}
       />
     </AlertDialogPortal>
   )

@@ -1,5 +1,7 @@
-import { useEffect, useLayoutEffect, useRef } from 'react'
+import { useEffect, useEffectEvent, useLayoutEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import { Button } from '@/components/ui/button'
@@ -10,7 +12,17 @@ import {
   setGuestState,
   useGuestState,
 } from './browser-session'
+import {
+  CollectionToolbar,
+  type ToolbarAction,
+  type ToolbarState,
+} from './collection-toolbar'
 import { desktop } from './desktop'
+import type {
+  InviteProgressAction,
+  InviteProgressState,
+  TaskOverlayContent,
+} from './invite-progress'
 import { useCommerce } from './store'
 import type { Account } from './types'
 
@@ -21,13 +33,87 @@ const useBrowser = create<{
   prepared: Record<string, number>
   covered: boolean
   bounds: Bounds
+  toolbar: ToolbarState | null
+  inviteProgress: InviteProgressState | null
 }>(() => ({
   active: '',
   visited: [],
   prepared: {},
   covered: false,
   bounds: { left: 0, top: 0, width: 0, height: 0 },
+  toolbar: null,
+  inviteProgress: null,
 }))
+
+export function useNativeInviteProgress(
+  state: InviteProgressState | null,
+  onAction: (action: InviteProgressAction) => void
+) {
+  const handleAction = useEffectEvent(
+    (event: { platform: string; action: InviteProgressAction }) => {
+      if (event.platform === state?.platform) onAction(event.action)
+    }
+  )
+  useEffect(() => {
+    if (!desktop) return
+    const subscription = listen<{
+      platform: string
+      action: InviteProgressAction
+    }>('assistant:invite-progress-action', ({ payload }) =>
+      handleAction(payload)
+    )
+    return () => {
+      void subscription.then((unsubscribe) => unsubscribe())
+    }
+  }, [])
+  useLayoutEffect(() => {
+    if (desktop) useBrowser.setState({ inviteProgress: state })
+  }, [state])
+  useLayoutEffect(
+    () => () => {
+      if (desktop) useBrowser.setState({ inviteProgress: null })
+    },
+    []
+  )
+}
+
+export function FloatingToolbar({
+  state,
+  onAction,
+}: {
+  state: ToolbarState
+  onAction: (action: ToolbarAction) => void
+}) {
+  const handleAction = useEffectEvent(
+    (event: { accountId: string; action: ToolbarAction }) => {
+      if (event.accountId === state.accountId) onAction(event.action)
+    }
+  )
+  useEffect(() => {
+    if (!desktop) return
+    const subscription = listen<{ accountId: string; action: ToolbarAction }>(
+      'assistant:toolbar-action',
+      ({ payload }) => handleAction(payload)
+    )
+    return () => {
+      void subscription.then((unsubscribe) => unsubscribe())
+    }
+  }, [])
+  useLayoutEffect(() => {
+    if (desktop) useBrowser.setState({ toolbar: state })
+  }, [state])
+  useLayoutEffect(
+    () => () => {
+      if (desktop) useBrowser.setState({ toolbar: null })
+    },
+    []
+  )
+  return (
+    <div className='floating-toolbar'>
+      <CollectionToolbar state={state} onAction={onAction} />
+    </div>
+  )
+}
 
 export function BrowserHost({ account }: { account: Account }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -144,18 +230,45 @@ function presentBrowser(accountId?: string, bounds?: Bounds) {
   presentation = presentation
     .then(async () => {
       if (revision !== presentationRevision) return
-      if (accountId) await invoke('browser_show', { accountId, bounds })
-      else await invoke('browser_hide')
+      let nativeBounds = bounds
+      if (accountId && bounds) {
+        const windowHandle = getCurrentWindow()
+        const [size, scale] = await Promise.all([
+          windowHandle.innerSize(),
+          windowHandle.scaleFactor(),
+        ])
+        if (revision !== presentationRevision) return
+        // macOS includes the title-bar inset in the native view, but not the DOM viewport.
+        nativeBounds = {
+          ...bounds,
+          top: bounds.top + size.toLogical(scale).height - window.innerHeight,
+        }
+        await invoke('browser_show', { accountId, bounds: nativeBounds })
+      } else await invoke('browser_hide')
       const task = accountId
         ? useCommerce.getState().tasks[accountId]
         : undefined
       const logs =
         task?.kind === 'collect' &&
         task.logs?.some((entry) => entry.level === 'error')
+      const progress = useBrowser.getState().inviteProgress
+      const overlay: TaskOverlayContent | null = progress
+        ? { kind: 'invite', ...progress }
+        : logs
+          ? { kind: 'collect', task }
+          : null
       await invoke('overlay_sync', {
-        accountId: logs ? accountId : null,
-        bounds: logs ? bounds : null,
-        task: logs ? task : null,
+        accountId: overlay ? accountId : null,
+        bounds:
+          overlay && nativeBounds
+            ? { ...nativeBounds, height: nativeBounds.height - 88 }
+            : null,
+        task: overlay,
+      })
+      const toolbar = useBrowser.getState().toolbar
+      await invoke('toolbar_sync', {
+        bounds: accountId ? nativeBounds : null,
+        state: accountId === toolbar?.accountId ? toolbar : null,
       })
     })
     .catch((e) => {

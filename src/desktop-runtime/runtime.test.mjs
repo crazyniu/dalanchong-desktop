@@ -5,7 +5,8 @@ import { InviteRunner } from './runner.mjs'
 import { createRuntime } from './runtime.mjs'
 
 function harness(
-  data = { logs: [], talents: [], records: [], tasks: {}, collections: [] }
+  data = { logs: [], talents: [], records: [], tasks: {}, collections: [] },
+  evaluate = async () => undefined
 ) {
   const handlers = new Map()
   const calls = []
@@ -17,7 +18,9 @@ function harness(
       if (command === 'license_verify') return { valid: true }
       if (command === 'runtime_load') return structuredClone(data)
       if (command === 'runtime_save') saved.push(structuredClone(args.data))
-      if (command === 'browser_prepare') return { url: urls.douyin }
+      if (command === 'browser_prepare')
+        return { url: urls[args.account.platform] }
+      if (command === 'platform_eval') return evaluate(args)
     },
     async (name, callback) => {
       handlers.set(name, callback)
@@ -32,6 +35,103 @@ function harness(
     })
   return { bridge, calls, events, saved, browser }
 }
+
+function identity(h, order, data, workspace = false) {
+  const request = {
+    kind: 'account',
+    order,
+    path: '/index/getUser',
+    url: 'https://buyin.jinritemai.com/index/getUser',
+    method: 'GET',
+    body: null,
+  }
+  h.browser({
+    type: 'response',
+    workspace,
+    request: { ...request, phase: 'pending' },
+  })
+  h.browser({
+    type: 'response',
+    workspace,
+    request: { ...request, phase: 'complete' },
+    response: {
+      status: 200,
+      url: request.url,
+      text: JSON.stringify({ code: 0, data }),
+    },
+  })
+}
+
+test('confirmed popup login closes once and an old workspace quota failure cannot expire it', async () => {
+  let finishQuota
+  const quota = new Promise((resolve) => {
+    finishQuota = resolve
+  })
+  const h = harness(undefined, () => quota)
+  await h.bridge.openAccountLogin({
+    id: 'a',
+    platform: 'douyin',
+    name: '账号备注',
+  })
+  h.browser({ type: 'ready', url: urls.douyin })
+  await new Promise(setImmediate)
+  assert.equal(h.calls.filter((c) => c.command === 'platform_eval').length, 1)
+
+  identity(h, 1, { shop_id: '0', shop_name: '' })
+  assert.equal(
+    h.calls.filter((c) => c.command === 'browser_finish_login').length,
+    0
+  )
+  identity(h, 2, { shop_id: 'shop-1', shop_name: '店铺一' })
+  identity(h, 3, { shop_id: 'shop-1', shop_name: '店铺一' })
+  finishQuota({
+    status: 200,
+    url: urls.douyin,
+    text: JSON.stringify({ code: -2, msg: '用户未登录' }),
+  })
+  await new Promise(setImmediate)
+
+  const patch = h.events
+    .filter((e) => e.type === 'account' && e.patch.status)
+    .at(-1).patch
+  assert.deepEqual(patch, {
+    shopId: 'shop-1',
+    shopName: '店铺一',
+    status: 'online',
+    quotaError: '',
+  })
+  assert.deepEqual(
+    h.calls.filter((c) => c.command === 'browser_finish_login'),
+    [{ command: 'browser_finish_login', args: { accountId: 'a' } }]
+  )
+  assert.equal(h.calls.filter((c) => c.command === 'platform_eval').length, 1)
+  assert.equal(
+    h.calls.filter((c) => c.command === 'diagnostic_append').length,
+    0
+  )
+})
+
+test('opening an existing account keeps its browser open and another workspace cannot finish popup login', async () => {
+  const h = harness()
+  const account = { id: 'a', platform: 'douyin', name: '账号备注' }
+  await h.bridge.openAccountLogin(account, false)
+  identity(h, 1, { shop_id: 'shop-1', shop_name: '店铺一' })
+  assert.equal(
+    h.calls.filter((c) => c.command === 'browser_finish_login').length,
+    0
+  )
+  await h.bridge.openAccountLogin(account)
+  identity(h, 2, { shop_id: 'shop-1', shop_name: '店铺一' }, true)
+  assert.equal(
+    h.calls.filter((c) => c.command === 'browser_finish_login').length,
+    0
+  )
+  identity(h, 3, { shop_id: 'shop-1', shop_name: '店铺一' })
+  assert.equal(
+    h.calls.filter((c) => c.command === 'browser_finish_login').length,
+    1
+  )
+})
 
 test('restart converts in-flight records to review, stops tasks and preserves native preferences', async () => {
   const h = harness({

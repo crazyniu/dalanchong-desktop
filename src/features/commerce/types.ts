@@ -30,7 +30,7 @@ export type InviteConfig = {
   phone: string
   wechat: string
   interval: number
-  maxInvites: number
+  maxInvites: number | null
 }
 export type Filters = {
   keyword: string

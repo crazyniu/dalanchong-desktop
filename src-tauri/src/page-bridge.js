@@ -20,6 +20,35 @@
   const documentId = crypto.randomUUID()
   const latest = new Map()
   const ownRequests = new Map()
+  let busyMask = null
+  let previousInert = false
+  const setBusy = (running) => {
+    if (running && !busyMask) {
+      previousInert = document.body.inert
+      document.body.inert = true
+      busyMask = document.createElement('div')
+      busyMask.tabIndex = 0
+      busyMask.setAttribute('role', 'status')
+      busyMask.setAttribute('aria-label', '任务运行中')
+      busyMask.style.cssText = 'position:fixed;inset:0;z-index:2147483647;display:grid;place-items:center;background:rgba(15,23,42,.15);cursor:wait;outline:none;'
+      const label = document.createElement('span')
+      label.textContent = '任务运行中'
+      label.style.cssText = 'padding:12px 16px;border-radius:12px;background:#fff;color:#0f172a;font:14px -apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 8px 24px rgba(15,23,42,.15);'
+      busyMask.append(label)
+      for (const event of ['pointerdown', 'click', 'contextmenu', 'keydown', 'wheel', 'touchmove']) {
+        busyMask.addEventListener(event, (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+        }, { passive: false })
+      }
+      document.documentElement.append(busyMask)
+      busyMask.focus({ preventScroll: true })
+    } else if (!running && busyMask) {
+      document.body.inert = previousInert
+      busyMask.remove()
+      busyMask = null
+    }
+  }
   const maxBody = 2 * 1024 * 1024
   let sequence = 0
   const sensitive = /cookie|token|authorization|password|secret|phone|mobile|wechat|contact|license|activation/i
@@ -175,6 +204,7 @@
 
   Object.defineProperty(window, '__DALANCHONG_BRIDGE__', {
     value: Object.freeze({
+      setBusy,
       async run(requestId, execute, request) {
         const key = request ? signature(request.path, request.body) : null
         if (key) ownRequests.set(key, (ownRequests.get(key) || 0) + 1)

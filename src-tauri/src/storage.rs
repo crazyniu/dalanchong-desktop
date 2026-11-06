@@ -95,6 +95,47 @@ pub async fn diagnostic_append(
 }
 
 #[tauri::command]
+pub async fn diagnostic_clear(
+    app: AppHandle,
+    webview: Webview,
+    platform: Option<String>,
+    account_id: Option<String>,
+    before: String,
+) -> Result<(), String> {
+    crate::require_main(&webview)?;
+    crate::license::require_valid(&app).await?;
+    let storage = app.state::<Storage>();
+    let _lock = storage.0.lock().await;
+    let directory = crate::data_dir(&app);
+    let logs = read_logs(&directory)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(directory.join("errors.ndjson"))
+        .map_err(|e| e.to_string())?;
+    for log in logs {
+        let matches = log["time"].as_str().unwrap_or("") <= before.as_str()
+            && platform
+                .as_deref()
+                .map(|p| log["platform"].is_null() || log["platform"] == p)
+                .unwrap_or(true)
+            && account_id
+                .as_deref()
+                .map(|id| log["accountId"] == id)
+                .unwrap_or(true);
+        if !matches {
+            writeln!(file, "{log}").map_err(|e| e.to_string())?;
+        }
+    }
+    file.sync_all().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn diagnostic_export(app: AppHandle, webview: Webview) -> Result<bool, String> {
     crate::require_main(&webview)?;
     let destination = app

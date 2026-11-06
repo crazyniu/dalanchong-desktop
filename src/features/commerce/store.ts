@@ -23,7 +23,7 @@ export const defaults: InviteConfig = {
   phone: '',
   wechat: desktop ? '' : 'shop_demo',
   interval: 1000,
-  maxInvites: 20,
+  maxInvites: null,
 }
 export const defaultFilters: Filters = {
   keyword: '',
@@ -197,6 +197,9 @@ type CommerceState = {
   login: (id: string) => void
   removeAccount: (id: string) => Promise<void>
   resolveRecord: (id: string, sent: boolean) => Promise<void>
+  clearLogs: (platform: Platform | 'all', accountId: string) => Promise<void>
+  clearTalents: (platform: Platform, ids?: string[]) => Promise<void>
+  clearRecords: (ids: string[]) => Promise<void>
 }
 export const useCommerce = create<CommerceState>()(
   persist(
@@ -271,6 +274,64 @@ export const useCommerce = create<CommerceState>()(
                   )?.id || ''
                 : s.selected[a.platform],
           },
+        }))
+      },
+      clearLogs: async (platform, accountId) => {
+        if (desktop) return desktop.clearLogs(platform, accountId)
+        set((s) => ({
+          logs: s.logs.filter(
+            (log) =>
+              !(
+                (platform === 'all' ||
+                  !log.platform ||
+                  log.platform === platform) &&
+                (accountId === 'all' || log.accountId === accountId)
+              )
+          ),
+          tasks: Object.fromEntries(
+            Object.entries(s.tasks).map(([id, task]) => [
+              id,
+              (accountId === 'all' || id === accountId) &&
+              (platform === 'all' ||
+                s.accounts.find((a) => a.id === id)?.platform === platform)
+                ? { ...task, logs: [] }
+                : task,
+            ])
+          ),
+        }))
+      },
+      clearTalents: async (platform, ids) => {
+        if (desktop) return desktop.clearTalents(platform, ids)
+        const state = get()
+        if (
+          state.accounts.some(
+            (a) =>
+              a.platform === platform && state.tasks[a.id]?.status === 'running'
+          )
+        )
+          throw Error('请先停止此平台的采集或邀约任务')
+        const selected = new Set(ids)
+        set((s) => ({
+          talents: s.talents.filter(
+            (talent) =>
+              talent.platform !== platform ||
+              (ids !== undefined && !selected.has(talent.id))
+          ),
+        }))
+      },
+      clearRecords: async (ids) => {
+        if (desktop) return desktop.clearRecords(ids)
+        const state = get()
+        if (
+          state.records.some(
+            (r) =>
+              ids.includes(r.id) &&
+              state.tasks[r.accountId]?.status === 'running'
+          )
+        )
+          throw Error('请先停止相关账号的任务')
+        set((s) => ({
+          records: s.records.filter((record) => !ids.includes(record.id)),
         }))
       },
       resolveRecord: async (id, sent) => {
@@ -459,7 +520,7 @@ export function startDemo(
     .talents.filter(
       (t) => t.platform === account.platform && selected.has(t.id)
     )
-    .slice(0, config.maxInvites)
+    .slice(0, config.maxInvites ?? undefined)
   if (!list.length) throw Error('请先从采集列表选择达人')
   const task = demoTask(account, 'invite', list.length)
   useCommerce.setState((s) => ({ tasks: { ...s.tasks, [account.id]: task } }))

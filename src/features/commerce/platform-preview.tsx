@@ -21,7 +21,11 @@ export function PlatformPreview({ account }: { account: Account }) {
   const login = useCommerce((s) => s.login)
   const [draft, setDraft] = useState<Filters>(applied)
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const list = filterCandidates(account.platform, applied)
+  const pages = Math.ceil(list.length / pageSize)
+  const current = Math.min(page, Math.max(1, pages))
+  const displayed = list.slice((current - 1) * pageSize, current * pageSize)
   if (account.status !== 'online')
     return (
       <div className='grid flex-1 place-content-center justify-items-center gap-4 bg-white'>
@@ -143,7 +147,7 @@ export function PlatformPreview({ account }: { account: Account }) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {list.slice((page - 1) * 8, page * 8).map((r, i) => (
+            {displayed.map((r, i) => (
               <TableRow key={r.id}>
                 <TableCell>
                   <span className='flex items-center gap-3'>
@@ -167,10 +171,15 @@ export function PlatformPreview({ account }: { account: Account }) {
           </div>
         )}
         <Pagination
-          page={page}
-          pages={Math.ceil(list.length / 8)}
+          page={current}
+          pages={pages}
           total={list.length}
+          pageSize={pageSize}
           onChange={setPage}
+          onPageSizeChange={(size) => {
+            setPageSize(size)
+            setPage(1)
+          }}
         />
       </div>
     </div>

@@ -25,6 +25,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { ClearDataButton } from './clear-data-button'
 import { formatTime, exportRecords } from './format'
 import {
   Choice,
@@ -51,19 +52,23 @@ export function RecordsDialog({
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState(initialStatus)
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [resolving, setResolving] = useState(false)
   const [resolveError, setResolveError] = useState('')
   const [detailId, setDetailId] = useState<string | null>(null)
   const accounts = useCommerce((s) => s.accounts)
   const resolve = useCommerce((s) => s.resolveRecord)
+  const clearRecords = useCommerce((s) => s.clearRecords)
+  const tasks = useCommerce((s) => s.tasks)
   const filtered = records.filter(
     (r) =>
       (status === 'all' || r.status === status) &&
       (r.name + r.talentId).includes(query)
   )
   const detail = records.find((r) => r.id === detailId)
-  const pages = Math.ceil(filtered.length / 8)
+  const pages = Math.ceil(filtered.length / pageSize)
   const current = Math.min(page, Math.max(1, pages))
+  const displayed = filtered.slice((current - 1) * pageSize, current * pageSize)
   async function confirmResult(id: string, sent: boolean) {
     setResolving(true)
     setResolveError('')
@@ -96,7 +101,7 @@ export function RecordsDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className='gap-5 sm:max-w-[1000px]'>
+        <DialogContent className='flex max-h-[85vh] flex-col gap-5 sm:max-w-[1000px]'>
           <DialogHeader>
             <DialogTitle>邀约记录</DialogTitle>
             <DialogDescription className='sr-only'>
@@ -136,8 +141,21 @@ export function RecordsDialog({
               <Download />
               导出记录
             </Button>
+            <ClearDataButton
+              label='清空记录'
+              description={`清空当前筛选范围的 ${filtered.length} 条记录，无法恢复；对应的本地邀约去重记录也会移除。`}
+              disabled={
+                !filtered.length ||
+                filtered.some((r) => tasks[r.accountId]?.status === 'running')
+              }
+              onClear={async () => {
+                await clearRecords(filtered.map((r) => r.id))
+                setDetailId(null)
+                setPage(1)
+              }}
+            />
           </div>
-          <div className='min-h-[376px] rounded-lg border'>
+          <div className='min-h-0 flex-1 overflow-y-auto rounded-lg border'>
             <Table>
               <TableHeader>
                 <TableRow>
@@ -149,7 +167,7 @@ export function RecordsDialog({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.slice((current - 1) * 8, current * 8).map((r) => (
+                {displayed.map((r) => (
                   <TableRow key={r.id}>
                     <TableCell className='font-medium'>{r.name}</TableCell>
                     <TableCell>
@@ -193,7 +211,12 @@ export function RecordsDialog({
             page={current}
             pages={pages}
             total={filtered.length}
+            pageSize={pageSize}
             onChange={setPage}
+            onPageSizeChange={(size) => {
+              setPageSize(size)
+              setPage(1)
+            }}
           />
         </DialogContent>
       </Dialog>
@@ -236,7 +259,7 @@ export function RecordsDialog({
               </div>
               <div className='space-y-2'>
                 <h4 className='font-medium'>邀约话术</h4>
-                <p className='rounded-lg bg-muted/60 p-4 leading-7'>
+                <p className='rounded-lg bg-muted/60 p-4 leading-7 break-words whitespace-pre-wrap'>
                   {detail.message}
                 </p>
               </div>

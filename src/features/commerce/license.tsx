@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { Copy, LoaderCircle } from 'lucide-react'
+import { ChevronRight, Copy, LoaderCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import { Button } from '@/components/ui/button'
@@ -251,6 +251,21 @@ export function LicenseStatus() {
     minute: '2-digit',
   })
   const expiryLabel = expiry ? `${expiryDate} ${expiryTime}` : '永久有效'
+  const remaining = expiry ? expiry.getTime() - Date.now() : null
+  const expired = remaining !== null && remaining <= 0
+  const expiringSoon = remaining !== null && remaining <= 7 * 86400000
+  const statusLabel = expired
+    ? '授权已到期'
+    : expiringSoon
+      ? '即将到期'
+      : expiry
+        ? '到期时间'
+        : '授权期限'
+  const colors = expired
+    ? 'bg-red-50 text-red-800 hover:bg-red-100 hover:text-red-900'
+    : expiringSoon
+      ? 'bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900'
+      : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 hover:text-emerald-900'
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -259,13 +274,22 @@ export function LicenseStatus() {
           size='sm'
           aria-label={`激活信息，到期时间：${expiryLabel}`}
           title={`到期时间：${expiryLabel}`}
-          className='h-8 px-0 text-sm font-normal text-muted-foreground tabular-nums hover:bg-transparent'
+          className={`h-auto w-full justify-between gap-3 rounded-xl px-3 py-3 text-left ${colors}`}
         >
-          {state.expiresAt ? (
-            <time dateTime={state.expiresAt}>{expiryDate}</time>
-          ) : (
-            '永久有效'
-          )}
+          <span className='flex min-w-0 flex-col gap-1'>
+            <span className='flex items-center gap-1.5 text-sm font-normal'>
+              <span className='size-1.5 shrink-0 rounded-full bg-current' />
+              {statusLabel}
+            </span>
+            <span className='text-base font-semibold tabular-nums'>
+              {state.expiresAt ? (
+                <time dateTime={state.expiresAt}>{expiryDate}</time>
+              ) : (
+                '永久有效'
+              )}
+            </span>
+          </span>
+          <ChevronRight className='size-4 shrink-0' />
         </Button>
       </DialogTrigger>
       <DialogContent

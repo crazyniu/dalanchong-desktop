@@ -1,35 +1,32 @@
 import { useState } from 'react'
-import { Link } from '@tanstack/react-router'
-import {
-  ChevronDown,
-  History,
-  LogIn,
-  Play,
-  RotateCw,
-  ScrollText,
-  Square,
-  UserRound,
-  UsersRound,
-} from 'lucide-react'
+import { Link, useNavigate } from '@tanstack/react-router'
+import { LogIn, UsersRound } from 'lucide-react'
 import { toast } from 'sonner'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { Progress } from '@/components/ui/progress'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { BrowserHost } from './browser'
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog'
+import {
+  BrowserHost,
+  FloatingToolbar,
+  useNativeInviteProgress,
+} from './browser'
 import { browserError, reloadPlatform, useGuestState } from './browser-session'
 import { CollectionList } from './collection-list'
 import { CollectionLog } from './collection-log'
+import { type ToolbarAction, type ToolbarState } from './collection-toolbar'
 import { desktop } from './desktop'
 import { InviteCompose } from './invite-compose'
+import {
+  InviteProgress,
+  useInviteProgressVisibility,
+  type InviteProgressAction,
+  type InviteProgressState,
+} from './invite-progress'
 import { PlatformPreview } from './platform-preview'
 import { RecordsDialog } from './records'
 import { collectDemo, defaultFilters, stopDemo, useCommerce } from './store'
@@ -38,14 +35,21 @@ import type { Platform } from './types'
 
 export function InvitePage({ platform }: { platform: Platform }) {
   const store = useCommerce()
+  const navigate = useNavigate()
   const available = store.accounts.filter((a) => a.platform === platform)
   const browserAccount =
     available.find((a) => a.id === store.selected[platform]) || available[0]
   const pageState = useGuestState((s) => s.sessions[browserAccount?.id])
   const pageReady = !desktop || pageState?.status === 'ready'
-  const [view, setView] = useState('collect')
+  const [listOpen, setListOpen] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
+  const [inviteTalentIds, setInviteTalentIds] = useState<string[]>([])
   const [composeOpen, setComposeOpen] = useState(false)
+  const {
+    dismissed: dismissedInvites,
+    dismiss,
+    show,
+  } = useInviteProgressVisibility()
   const [inviteAccountId, setInviteAccountId] = useState('')
   const [pendingInvite, setPendingInvite] = useState(false)
   const [recordsOpen, setRecordsOpen] = useState(false)
@@ -60,9 +64,37 @@ export function InvitePage({ platform }: { platform: Platform }) {
     : undefined
   const collecting =
     collectionTask?.kind === 'collect' && collectionTask.status === 'running'
+  const inviting =
+    collectionTask?.kind === 'invite' && collectionTask.status === 'running'
+  const pageBusy =
+    shownAccount && store.tasks[shownAccount.id]?.status === 'running'
   const inviteTasks = available
     .map((a) => ({ account: a, task: store.tasks[a.id] }))
-    .filter((x) => x.task && x.task.kind !== 'collect')
+    .filter(({ task }) => task && task.kind !== 'collect')
+  const visibleInvites = inviteTasks.filter(
+    ({ task }) =>
+      !dismissedInvites.includes(`${task.accountId}:${task.startedAt}`)
+  )
+  const inviteProgress: InviteProgressState | null = visibleInvites.length
+    ? {
+        platform,
+        tasks: visibleInvites.map(({ account, task }) => ({
+          name: account.name,
+          task,
+        })),
+      }
+    : null
+  function progressAction(action: InviteProgressAction) {
+    if (action.type === 'stop') void stop(action.accountId)
+    else
+      dismiss(
+        visibleInvites.map(({ task }) => `${task.accountId}:${task.startedAt}`)
+      )
+  }
+  function showProgress() {
+    show(inviteTasks.map(({ task }) => `${task.accountId}:${task.startedAt}`))
+  }
+  useNativeInviteProgress(inviteProgress, progressAction)
   async function collect() {
     if (!pageReady || (desktop && !store.captured[browserAccount.id])) return
     setStarting(true)
@@ -86,14 +118,15 @@ export function InvitePage({ platform }: { platform: Platform }) {
       toast.error((e as Error).message)
     }
   }
-  function openInvite() {
-    setInviteAccountId(inviteAccountId || browserAccount?.id || '')
+  function openInvite(ids: string[]) {
+    setInviteTalentIds(ids)
+    setInviteAccountId(sendAccount?.id || browserAccount?.id || '')
     setComposeOpen(true)
   }
   function loginForInvite(id: string) {
     store.selectAccount(platform, id)
     setComposeOpen(false)
-    setView('collect')
+    setListOpen(false)
     setPendingInvite(true)
   }
   async function returnToInvite() {
@@ -101,298 +134,189 @@ export function InvitePage({ platform }: { platform: Platform }) {
     try {
       store.selectAccount(platform, inviteAccountId)
       if (desktop && !(await reloadPlatform(inviteAccountId))) return
-      setView('list')
+      setListOpen(true)
       setComposeOpen(true)
     } finally {
       setReturning(false)
     }
   }
+  const toolbar: ToolbarState = {
+    accountId: browserAccount?.id || '',
+    accounts: available.map(({ id, name, status }) => ({ id, name, status })),
+    view: 'collect',
+    count: talents.length,
+    progress: collecting
+      ? `已采集 ${collectionTask.collected}`
+      : collectionTask?.kind === 'collect'
+        ? collectionTask.current
+        : '',
+    collecting,
+    inviting,
+    hasInvites: inviteTasks.length > 0,
+    pendingInvite,
+    returning,
+    disabled:
+      !collecting &&
+      !inviting &&
+      (!pageReady ||
+        Boolean(desktop && !store.captured[browserAccount?.id]) ||
+        browserAccount?.status !== 'online' ||
+        starting ||
+        collectionTask?.status === 'running'),
+    label: collecting
+      ? '停止采集'
+      : inviting
+        ? '停止邀约'
+        : !pageReady
+          ? pageState?.status === 'error'
+            ? '网页未就绪'
+            : '正在加载网页'
+          : starting
+            ? '正在启动'
+            : desktop && !store.captured[browserAccount?.id]
+              ? '等待网页筛选'
+              : '开始采集',
+  }
+  function toolbarAction(action: ToolbarAction) {
+    switch (action.type) {
+      case 'view':
+        if (action.view === 'list') setListOpen(true)
+        break
+      case 'account':
+        store.selectAccount(platform, action.id)
+        break
+      case 'manage':
+        void navigate({ to: '/accounts' })
+        break
+      case 'reload':
+        if (desktop) void reloadPlatform(browserAccount.id)
+        else toast.success('网页预览已刷新')
+        break
+      case 'collect':
+        void collect()
+        break
+      case 'stop':
+        void stop(browserAccount.id)
+        break
+      case 'return':
+        void returnToInvite()
+        break
+      case 'logs':
+        setLogsOpen(true)
+        break
+      case 'records':
+        setRecordsOpen(true)
+        break
+      case 'progress':
+        showProgress()
+        break
+    }
+  }
   return (
-    <main className='flex min-h-0 flex-1 flex-col'>
-      <div
-        className='page-toolbar workspace-toolbar shrink-0 border-b'
-        data-testid='collection-toolbar'
-      >
-        <Tabs value={view} onValueChange={setView}>
-          <TabsList>
-            <TabsTrigger value='collect'>采集达人</TabsTrigger>
-            <TabsTrigger value='list'>
-              采集列表{' '}
-              <span className='ml-1 tabular-nums'>{talents.length}</span>
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-        {view === 'collect' && (
-          <>
-            {collecting ? (
-              <span className='text-sm text-muted-foreground tabular-nums'>
-                已采集 {collectionTask.collected}
-              </span>
-            ) : (
-              collectionTask?.kind === 'collect' && (
-                <span
-                  className='max-w-56 truncate text-sm text-muted-foreground'
-                  title={collectionTask.current}
-                >
-                  {collectionTask.current}
-                </span>
-              )
-            )}
-            <div className='ml-auto flex items-center gap-3'>
-              {browserAccount && (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant='ghost'
-                      size='sm'
-                      className='max-w-48 gap-2 text-muted-foreground'
-                      aria-label='当前网页账号'
-                    >
-                      <UserRound className='size-4' />
-                      <span className='truncate'>{browserAccount.name}</span>
-                      <span
-                        className={`size-1.5 shrink-0 rounded-full ${browserAccount.status === 'online' ? 'bg-emerald-600' : 'bg-amber-600'}`}
-                      />
-                      <ChevronDown className='size-3' />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align='end'>
-                    <DropdownMenuLabel>网页账号</DropdownMenuLabel>
-                    {available.map((a) => (
-                      <DropdownMenuItem
-                        key={a.id}
-                        onClick={() => store.selectAccount(platform, a.id)}
-                      >
-                        {a.name}
-                        {a.id === browserAccount.id && (
-                          <Badge variant='secondary' className='ml-auto'>
-                            当前
-                          </Badge>
-                        )}
-                      </DropdownMenuItem>
-                    ))}
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem asChild>
-                      <Link to='/accounts'>管理账号</Link>
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              )}
-              {browserAccount && (
-                <Button
-                  variant='ghost'
-                  size='icon'
-                  className='size-8'
-                  aria-label='返回达人页面'
-                  title='返回达人页面'
-                  onClick={() =>
-                    desktop
-                      ? reloadPlatform(browserAccount.id)
-                      : toast.success('网页预览已刷新')
-                  }
-                >
-                  <RotateCw className='size-4' />
-                </Button>
-              )}
-              {pendingInvite ? (
-                <Button size='sm' disabled={returning} onClick={returnToInvite}>
-                  {returning ? '正在打开' : '返回邀约'}
-                </Button>
-              ) : (
-                browserAccount && (
-                  <Button
-                    size='sm'
-                    disabled={
-                      !collecting &&
-                      (!pageReady ||
-                        (desktop && !store.captured[browserAccount.id]) ||
-                        browserAccount.status !== 'online' ||
-                        starting ||
-                        collectionTask?.status === 'running')
-                    }
-                    onClick={() =>
-                      collecting ? stop(browserAccount.id) : collect()
-                    }
-                  >
-                    {collecting ? (
-                      <Square className='size-3 fill-current' />
-                    ) : (
-                      <Play className='size-3 fill-current' />
-                    )}
-                    {collecting
-                      ? '停止采集'
-                      : !pageReady
-                        ? pageState?.status === 'error'
-                          ? '网页未就绪'
-                          : '正在加载网页'
-                        : starting
-                          ? '正在启动'
-                          : desktop && !store.captured[browserAccount.id]
-                            ? '等待网页筛选'
-                            : '开始采集'}
-                  </Button>
-                )
-              )}
-            </div>
-          </>
-        )}
-        <Button
-          variant='ghost'
-          size='sm'
-          className={
-            view === 'list'
-              ? 'ml-auto text-muted-foreground'
-              : 'text-muted-foreground'
-          }
-          onClick={() => setLogsOpen(true)}
-        >
-          <ScrollText />
-          错误日志
-        </Button>
-        <Button
-          variant='ghost'
-          size='sm'
-          className='text-muted-foreground'
-          onClick={() => setRecordsOpen(true)}
-        >
-          <History />
-          邀约记录
-        </Button>
-      </div>
+    <main className='relative flex h-svh min-h-0 flex-none flex-col'>
+      <FloatingToolbar state={toolbar} onAction={toolbarAction} />
       <div
         className='relative flex min-h-0 flex-1 flex-col'
         data-testid='platform-workspace'
       >
-        {(view === 'collect' || composeOpen) && (
-          <div
-            className={
-              view === 'collect'
-                ? 'flex min-h-0 flex-1 flex-col'
-                : 'absolute inset-0 flex flex-col'
-            }
-          >
-            {shownAccount ? (
-              desktop ? (
-                <BrowserHost account={shownAccount} />
-              ) : (
-                <PlatformPreview key={shownAccount.id} account={shownAccount} />
-              )
+        <div className='flex min-h-0 flex-1 flex-col' inert={Boolean(pageBusy)}>
+          {shownAccount ? (
+            desktop ? (
+              <BrowserHost account={shownAccount} />
             ) : (
-              <div className='grid flex-1 place-content-center justify-items-center gap-4'>
-                <UsersRound className='size-9 text-muted-foreground' />
-                <p>添加账号后打开平台网页</p>
-                <Button asChild>
-                  <Link to='/accounts'>
-                    <LogIn />
-                    添加账号
-                  </Link>
-                </Button>
-              </div>
-            )}
+              <PlatformPreview key={shownAccount.id} account={shownAccount} />
+            )
+          ) : (
+            <div className='grid flex-1 place-content-center justify-items-center gap-4'>
+              <UsersRound className='size-9 text-muted-foreground' />
+              <p>添加账号后打开平台网页</p>
+              <Button asChild>
+                <Link to='/accounts'>
+                  <LogIn />
+                  添加账号
+                </Link>
+              </Button>
+            </div>
+          )}
+        </div>
+        {!desktop && pageBusy && (
+          <div className='absolute inset-0 z-20 grid cursor-wait place-items-center bg-slate-950/15'>
+            <span className='rounded-xl bg-background px-4 py-3 text-sm shadow-lg'>
+              任务运行中
+            </span>
           </div>
         )}
-        {view === 'collect' &&
+        {inviteProgress && !listOpen && (
+          <InviteProgress
+            state={inviteProgress}
+            onAction={progressAction}
+            className='bottom-26'
+          />
+        )}
+        {!inviteProgress &&
           collectionTask?.kind === 'collect' &&
           Boolean(
             collectionTask.logs?.some((entry) => entry.level === 'error')
           ) && (
-            <CollectionLog
-              key={`${collectionTask.accountId}-${collectionTask.startedAt}`}
-              task={collectionTask}
-            />
+            <div className='pointer-events-none absolute inset-x-0 top-0 bottom-22 [&>*]:pointer-events-auto'>
+              <CollectionLog
+                key={`${collectionTask.accountId}-${collectionTask.startedAt}`}
+                task={collectionTask}
+              />
+            </div>
           )}
-        {view === 'list' && (
-          <div className='relative z-20 min-h-0 flex-1 overflow-y-auto bg-white'>
+      </div>
+      <Dialog open={listOpen} onOpenChange={setListOpen}>
+        <DialogContent className='flex max-h-[85vh] flex-col gap-0 p-0 sm:max-w-[1180px]'>
+          <DialogHeader className='flex-row items-center justify-between border-b px-6 py-5 pr-12'>
+            <DialogTitle>采集列表 · {talents.length}</DialogTitle>
             {inviteTasks.length > 0 && (
-              <div className='space-y-3 border-b bg-muted/20 px-6 py-4'>
-                {inviteTasks.map(({ account, task }) => (
-                  <div
-                    key={account.id}
-                    className='flex items-center gap-4 text-sm'
-                  >
-                    <span className='w-40 truncate font-medium'>
-                      {account.name}
-                    </span>
-                    <Badge
-                      variant={
-                        task.status === 'running' ? 'default' : 'secondary'
-                      }
-                      className='font-normal'
-                    >
-                      {task.status === 'running'
-                        ? '邀约中'
-                        : task.status === 'done'
-                          ? '已完成'
-                          : '已停止'}
-                    </Badge>
-                    <Progress
-                      value={
-                        task.total ? (task.processed / task.total) * 100 : 0
-                      }
-                      className='h-1.5 w-28'
-                    />
-                    <span className='text-muted-foreground tabular-nums'>
-                      {task.processed} / {task.total}
-                    </span>
-                    <span className='text-emerald-700'>
-                      已邀约 {task.success}
-                    </span>
-                    <span className='text-muted-foreground'>
-                      跳过 {task.skipped}
-                    </span>
-                    {task.review > 0 && (
-                      <span className='text-amber-700'>
-                        待核实 {task.review}
-                      </span>
-                    )}
-                    <span
-                      className='min-w-0 flex-1 truncate text-muted-foreground'
-                      title={task.current}
-                    >
-                      {task.current}
-                    </span>
-                    {task.status === 'running' && (
-                      <Button
-                        size='sm'
-                        variant='outline'
-                        onClick={() => stop(account.id)}
-                      >
-                        <Square className='size-3' />
-                        停止
-                      </Button>
-                    )}
-                  </div>
-                ))}
-              </div>
+              <Button variant='ghost' size='sm' onClick={showProgress}>
+                邀约进度
+              </Button>
             )}
+            <DialogDescription className='sr-only'>
+              查看已采集达人并选择邀约
+            </DialogDescription>
+          </DialogHeader>
+          <div className='min-h-0 flex-1 overflow-y-auto'>
             <CollectionList
               platform={platform}
               talents={talents}
               selected={selected}
               onSelect={setSelected}
               onInvite={openInvite}
-              onCollect={() => setView('collect')}
+              onCollect={() => setListOpen(false)}
             />
           </div>
-        )}
-      </div>
-      <InviteCompose
-        open={composeOpen}
-        onOpenChange={(open) => {
-          setComposeOpen(open)
-          if (!open) setPendingInvite(false)
-        }}
-        platform={platform}
-        accountId={inviteAccountId}
-        onAccountChange={setInviteAccountId}
-        selectedIds={selected}
-        onLogin={loginForInvite}
-        onStarted={() => {
-          setComposeOpen(false)
-          setPendingInvite(false)
-          setView('list')
-        }}
-      />
+          {inviteProgress && !composeOpen && !recordsOpen && !logsOpen && (
+            <InviteProgress
+              state={inviteProgress}
+              onAction={progressAction}
+              className='right-6 bottom-24 z-40'
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+      {composeOpen && (
+        <InviteCompose
+          open={composeOpen}
+          onOpenChange={(open) => {
+            setComposeOpen(open)
+            if (!open) setPendingInvite(false)
+          }}
+          platform={platform}
+          accountId={inviteAccountId}
+          onAccountChange={setInviteAccountId}
+          selectedIds={inviteTalentIds}
+          onLogin={loginForInvite}
+          onStarted={() => {
+            setComposeOpen(false)
+            setPendingInvite(false)
+            setListOpen(true)
+          }}
+        />
+      )}
       {logsOpen && (
         <TaskLogsDialog
           open

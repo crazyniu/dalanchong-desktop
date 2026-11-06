@@ -6,6 +6,7 @@
   "permissions": [
     "core:event:default",
     "allow-overlay-resize",
-    "allow-overlay-ready"
+    "allow-overlay-ready",
+    "allow-overlay-action"
   ]
 }

@@ -29,7 +29,7 @@ Rust command 对 main 来源进行校验，开始任务、平台请求前调用 
 
 ## 本机数据
 
-`<应用数据目录>/assistant-data/license-tauri.json` 只保存安装 UUID；激活码保存在系统凭据存储（macOS Keychain / Windows Credential Manager），不保存可作为离线授权依据的成功状态。首次迁移只读取旧 license.json 的 deviceId，保留旧文件和设备绑定，用户重新输入原码。前端无法取得明文凭据。
+`<应用数据目录>/assistant-data/license-tauri.json` 保存安装 UUID 和激活码，不再访问钥匙串或系统凭据存储；macOS 本地文件权限为 0600。授权成功状态不作为离线授权依据，仍由 Rust 联网校验。已有设备 ID 和绑定保留；旧版本只存于钥匙串的激活码需要用户重新输入一次，程序不读取旧钥匙串。前端不能读取本地保存的激活码。
 
 `sh ./run.sh` 默认使用 `../.local/ecommerce-assistant`，与已有账号数据共用同一目录。单独 `pnpm desktop` 沿用 `<appData>/电商助手` 目录（旧名称用于保持数据兼容）；两种方式的安装 ID 不同，请日常统一用 `run.sh`。清空目录或换数据目录会成为新设备。安装 ID 是本机持久化标识，不是硬件指纹；不要把用户数据目录复制给其他人。
 
@@ -45,4 +45,4 @@ pnpm build
 ASSISTANT_TEST_DATA="$(mktemp -d /tmp/assistant-license.XXXXXX)" pnpm desktop
 ```
 
-真实联调使用临时测试码与隔离数据目录，检查安装 ID、系统凭据保存、重启校验、错误换码保留原码，以及断网、过期、解绑、异设备和禁用设备时的拒绝行为。完成后仅删除该测试码，不触碰用户已有激活码或真实账号数据。
+真实联调使用临时测试码与隔离数据目录，检查安装 ID、本地缓存保存、重启校验、错误换码保留原码，以及断网、过期、解绑、异设备和禁用设备时的拒绝行为。完成后仅删除该测试码，不触碰用户已有激活码或真实账号数据。

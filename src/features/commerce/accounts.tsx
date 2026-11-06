@@ -5,7 +5,6 @@ import {
   ArrowUpRight,
   LogIn,
   Trash2,
-  ShieldCheck,
   ScrollText,
   Store,
 } from 'lucide-react'
@@ -18,7 +17,6 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogCancel,
-  AlertDialogAction,
 } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -67,24 +65,24 @@ export function AccountsPage() {
   const [loginId, setLoginId] = useState<string | null>(null)
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [removeId, setRemoveId] = useState<string | null>(null)
+  const [removing, setRemoving] = useState(false)
   const filtered = store.accounts.filter(
     (a) =>
       (platform === 'all' || a.platform === platform) &&
       (a.name + (a.shopName ?? '') + a.shopId).includes(query)
   )
   const loggingIn = store.accounts.find((a) => a.id === loginId)
-  async function openAccount(a: Account) {
+  async function openAccount(a: Account, closeOnLogin = a.status !== 'online') {
     if (!desktop) {
       setLoginId(a.id)
       return
     }
     setOpeningId(a.id)
     try {
-      await desktop.openAccountLogin({
-        id: a.id,
-        platform: a.platform,
-        name: a.name,
-      })
+      await desktop.openAccountLogin(
+        { id: a.id, platform: a.platform, name: a.name },
+        closeOnLogin
+      )
     } catch (error) {
       toast.error(browserError(error))
     } finally {
@@ -206,7 +204,7 @@ export function AccountsPage() {
                       <DropdownMenuContent align='end'>
                         <DropdownMenuItem
                           disabled={openingId === a.id}
-                          onClick={() => openAccount(a)}
+                          onClick={() => openAccount(a, true)}
                         >
                           <LogIn />
                           重新登录
@@ -234,10 +232,6 @@ export function AccountsPage() {
             <p>暂无符合条件的账号</p>
           </div>
         )}
-      </div>
-      <div className='flex items-center gap-2 text-sm text-muted-foreground'>
-        <ShieldCheck size={16} />
-        <span>登录数据按账号保存在本机</span>
       </div>
       <Dialog open={adding} onOpenChange={setAdding}>
         <DialogContent>
@@ -344,20 +338,25 @@ export function AccountsPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                store
-                  .removeAccount(removeId!)
-                  .then(() => {
-                    setRemoveId(null)
-                    toast.success('账号已移除')
-                  })
-                  .catch((e) => toast.error(e.message))
+            <AlertDialogCancel disabled={removing}>取消</AlertDialogCancel>
+            <Button
+              variant='destructive'
+              disabled={removing}
+              onClick={async () => {
+                setRemoving(true)
+                try {
+                  await store.removeAccount(removeId!)
+                  setRemoveId(null)
+                  toast.success('账号已移除')
+                } catch (error) {
+                  toast.error(browserError(error))
+                } finally {
+                  setRemoving(false)
+                }
               }}
             >
-              移除账号
-            </AlertDialogAction>
+              {removing ? '正在移除' : '移除账号'}
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

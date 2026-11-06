@@ -200,6 +200,26 @@ fn cancel_pending(app: &AppHandle, label: &str) {
     inner.latest.retain(|(source, _), _| source != label);
 }
 
+pub fn set_busy(app: &AppHandle, account_id: &str, running: bool) -> Result<(), String> {
+    let labels: Vec<_> = app
+        .state::<BrowserState>()
+        .inner
+        .lock()
+        .unwrap()
+        .sources
+        .iter()
+        .filter(|(_, source)| source.account_id == account_id)
+        .map(|(label, _)| label.clone())
+        .collect();
+    for label in labels {
+        if let Some(view) = app.get_webview(&label) {
+            view.eval(format!("window.__DALANCHONG_BRIDGE__?.setBusy({running})"))
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 fn builder(app: &AppHandle, account: &Account, workspace: bool) -> WebviewBuilder<tauri::Wry> {
     let label = view_label(app, account, workspace);
     let source = Source {
@@ -211,8 +231,6 @@ fn builder(app: &AppHandle, account: &Account, workspace: bool) -> WebviewBuilde
         "__DALANCHONG_PLATFORM__",
         &serde_json::to_string(&account.platform).unwrap(),
     );
-    let navigation_app = app.clone();
-    let navigation_label = label.clone();
     let popup_app = app.clone();
     let popup_label = label.clone();
     let load_source = source.clone();
@@ -220,13 +238,7 @@ fn builder(app: &AppHandle, account: &Account, workspace: bool) -> WebviewBuilde
         .initialization_script(script)
         .disable_drag_drop_handler()
         .focused(false)
-        .on_navigation(move |url| {
-            let allowed = url.scheme() == "https" || url.as_str() == "about:blank";
-            if allowed {
-                cancel_pending(&navigation_app, &navigation_label);
-            }
-            allowed
-        })
+        .on_navigation(|url| url.scheme() == "https" || url.as_str() == "about:blank")
         .on_new_window(move |url, _features| {
             // Match the previous login browser: target=_blank stays in its
             // originating WebView, retaining the account store and bridge.
@@ -263,8 +275,17 @@ fn builder(app: &AppHandle, account: &Account, workspace: bool) -> WebviewBuilde
                 return;
             }
             let event = match payload.event() {
-                PageLoadEvent::Started => "navigation",
-                PageLoadEvent::Finished => "ready",
+                PageLoadEvent::Started => {
+                    // WKWebView also calls on_navigation for iframe navigation.
+                    // Only replacing the main document invalidates its requests.
+                    cancel_pending(view.app_handle(), view.label());
+                    "navigation"
+                }
+                PageLoadEvent::Finished => {
+                    let running = task_running(view.app_handle(), &load_source.account_id);
+                    let _ = view.eval(format!("window.__DALANCHONG_BRIDGE__?.setBusy({running})"));
+                    "ready"
+                },
             };
             emit(
                 view.app_handle(),
@@ -524,13 +545,32 @@ pub async fn browser_login(
                 if let Some(workspace) =
                     close_app.get_webview(&view_label(&close_app, &close_account, true))
                 {
-                    let _ = workspace.reload();
+                    let _ = workspace
+                        .navigate(close_account.platform.workspace_url().parse().unwrap());
                 }
             }
         }
     });
     view.navigate(account.platform.login_url().parse().unwrap())
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn browser_finish_login(
+    app: AppHandle,
+    webview: Webview,
+    account_id: String,
+) -> Result<(), String> {
+    require_main(&webview)?;
+    license::require_valid(&app).await?;
+    let state = app.state::<BrowserState>();
+    let _operation = state.operations.lock().await;
+    let account = account_for(&app, &account_id)?;
+    if let Some(window) = app.get_window(&view_label(&app, &account, false)) {
+        save_session(&app, &account).await?;
+        window.destroy().map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -883,16 +923,10 @@ async fn restore_session(app: &AppHandle, view: &Webview, account: &Account) -> 
     if let Err(error) =
         crate::cookies::restore(app, view, &store_id(app, account).to_string()).await
     {
-        let file = data_dir(app).join(format!("{}.tauri-cookies", store_id(app, account)));
-        std::fs::rename(
-            &file,
-            file.with_extension(format!("unreadable-{}", Uuid::new_v4())),
-        )
-        .map_err(|e| e.to_string())?;
         crate::cookies::report(
             app,
             &account.id,
-            &format!("恢复失败，已保留旧快照，请重新登录：{error}"),
+            &format!("恢复失败，原登录快照已保留：{error}"),
         );
     }
     app.state::<BrowserState>()
@@ -907,7 +941,16 @@ async fn save_session(app: &AppHandle, account: &Account) -> Result<(), String> 
     let view = app
         .get_webview(&view_label(app, account, true))
         .ok_or("账号网页已关闭")?;
-    crate::cookies::save(app, &view, &store_id(app, account).to_string()).await
+    crate::cookies::save(app, &view, &store_id(app, account).to_string()).await?;
+    let saved_at = time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    app.emit_to(
+        "main",
+        "assistant:event",
+        json!({"type":"account", "id":account.id, "patch":{"savedAt":saved_at}}),
+    )
+    .map_err(|e| e.to_string())
 }
 pub async fn flush_sessions(app: &AppHandle) -> Result<(), String> {
     let accounts: Vec<_> = app

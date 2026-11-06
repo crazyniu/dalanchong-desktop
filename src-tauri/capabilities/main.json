@@ -16,6 +16,7 @@
     "allow-runtime-save",
     "allow-diagnostic-append",
     "allow-diagnostic-export",
+    "allow-diagnostic-clear",
     "allow-set-task-state",
     "allow-update-state",
     "allow-update-check",
@@ -26,8 +27,10 @@
     "allow-browser-hide",
     "allow-browser-navigate",
     "allow-browser-login",
+    "allow-browser-finish-login",
     "allow-browser-remove",
     "allow-platform-eval",
-    "allow-overlay-sync"
+    "allow-overlay-sync",
+    "allow-toolbar-sync"
   ]
 }

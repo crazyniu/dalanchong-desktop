@@ -3,7 +3,10 @@ import { createRoot } from 'react-dom/client'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { CollectionLog } from './features/commerce/collection-log'
-import type { Task } from './features/commerce/types'
+import {
+  InviteProgress,
+  type TaskOverlayContent,
+} from './features/commerce/invite-progress'
 import './log-overlay.css'
 import './styles/index.css'
 
@@ -12,16 +15,15 @@ document.body.style.background = 'transparent'
 document.body.style.overflow = 'hidden'
 
 export function Logs() {
-  const [task, setTask] = useState<Task>()
+  const [content, setContent] = useState<TaskOverlayContent | null>(null)
   useEffect(() => {
-    const subscription = listen<Task>('assistant:logs', ({ payload }) =>
-      setTask(payload)
+    const subscription = listen<TaskOverlayContent>(
+      'assistant:logs',
+      ({ payload }) => setContent(payload)
     )
     void subscription
-      .then(() => invoke<Task | null>('overlay_ready'))
-      .then((current) => {
-        if (current) setTask(current)
-      })
+      .then(() => invoke<TaskOverlayContent | null>('overlay_ready'))
+      .then(setContent)
     return () => {
       void subscription.then((unsubscribe) => unsubscribe())
     }
@@ -51,7 +53,20 @@ export function Logs() {
       observer.disconnect()
       mutation.disconnect()
     }
-  }, [task?.startedAt])
-  return task ? <CollectionLog task={task} /> : null
+  }, [])
+  if (!content) return null
+  return content.kind === 'invite' ? (
+    <InviteProgress
+      state={content}
+      onAction={(action) => {
+        void invoke('overlay_action', { action })
+      }}
+    />
+  ) : (
+    <CollectionLog
+      key={`${content.task.accountId}:${content.task.startedAt}`}
+      task={content.task}
+    />
+  )
 }
 createRoot(document.getElementById('root')!).render(<Logs />)
