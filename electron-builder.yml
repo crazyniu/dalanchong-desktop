@@ -1,0 +1,34 @@
+appId: com.local.ecommerceassistant
+productName: 大懒虫
+asar: true
+npmRebuild: false
+compression: maximum
+artifactName: dalanchong-${version}-${os}-${arch}.${ext}
+directories:
+  output: dist-release
+files:
+  - dist/**/*
+  - electron/**/*
+  - assets/icons/icon-256.png
+  - assets/icons/mac-1024.png
+  - LICENSE
+mac:
+  icon: assets/icons/app.icns
+  category: public.app-category.business
+  hardenedRuntime: true
+  notarize: true
+  target:
+    - dmg
+    - zip
+win:
+  icon: assets/icons/app.ico
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+publish:
+  provider: generic
+  url: https://gitee.com/zhenxiaoguo/dalanchong/raw/main/updates/${env.UPDATE_PLATFORM}/${arch}/
