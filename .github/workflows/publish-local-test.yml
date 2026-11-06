@@ -1,10 +1,15 @@
-name: Build Mac test release to Gitee
+name: Build Windows test release to Gitee
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Mac arm64 test version (vX.Y.Z)
+        description: Windows x64 test version (vX.Y.Z)
         required: true
+        type: string
+      current_version:
+        description: Current version for the download check
+        required: true
+        default: '0.3.0'
         type: string
 permissions:
   contents: write
@@ -13,7 +18,11 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build-and-publish:
-    runs-on: macos-15
+    runs-on: windows-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
     env:
       RELEASE_TAG: ${{ inputs.tag }}
     steps:
@@ -26,23 +35,34 @@ jobs:
           version: 11.15.1
           install: false
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
       - run: pnpm install --frozen-lockfile
       - run: node scripts/prepare-release.mjs --tag "$RELEASE_TAG"
-      - name: Build Mac arm64 test package
-        run: node scripts/package.mjs darwin arm64
+      - name: Build Windows x64 installer
+        run: node scripts/package.mjs win32 x64
         env:
-          APPLE_SIGNING_IDENTITY: '-'
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - uses: actions/upload-artifact@v4
         with:
-          name: release-darwin-arm64
+          name: release-win32-x64
           path: dist-release/tauri/**
           if-no-files-found: error
       - name: Publish to Gitee
-        run: node scripts/publish-release.mjs --tag "$RELEASE_TAG" --artifacts dist-release/tauri --targets darwin/arm64
+        run: node scripts/publish-release.mjs --tag "$RELEASE_TAG" --artifacts dist-release/tauri --targets win32/x64
         env:
           GH_TOKEN: ${{ github.token }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+      - name: Check and download using the Windows app updater
+        timeout-minutes: 8
+        run: |
+          cargo build --locked --release --target x86_64-pc-windows-msvc --manifest-path src-tauri/Cargo.toml --example update-download
+          ./src-tauri/target/x86_64-pc-windows-msvc/release/examples/update-download.exe
+        env:
+          ASSISTANT_TEST_DATA: ${{ runner.temp }}/dalanchong-update-download
+          UPDATE_CURRENT_VERSION: ${{ inputs.current_version }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-update-download-result
+          path: ${{ runner.temp }}/dalanchong-update-download/result.json
+          if-no-files-found: ignore

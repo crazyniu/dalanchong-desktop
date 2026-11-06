@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { createRequire } from 'node:module'
 
 const root = path.resolve(import.meta.dirname, '..')
 const platform = process.argv[2] || process.platform
@@ -43,8 +44,8 @@ const configFile = path.join(root, '.work/tauri-build-config.json')
 await mkdir(path.dirname(configFile), { recursive: true })
 await writeFile(configFile, JSON.stringify(config))
 execFileSync(
-  process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm',
-  ['tauri', 'build', '--target', target, '--config', configFile],
+  process.execPath,
+  [createRequire(import.meta.url).resolve('@tauri-apps/cli/tauri.js'), 'build', '--target', target, '--config', configFile],
   { cwd: root, env, stdio: 'inherit' }
 )
 const bundle = path.join(root, 'src-tauri/target', target, 'release/bundle')
