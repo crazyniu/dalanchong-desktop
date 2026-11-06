@@ -1,14 +1,14 @@
 # 大懒虫
 
-基于 Shadcn Admin、React、shadcn/ui 和 Electron 的中文桌面工具。
+基于 Shadcn Admin、React、shadcn/ui 和 Tauri 2 的中文桌面工具。
 
 本目录为独立仓库根目录：[GitHub 源码](https://github.com/crazyniu/dalanchong-desktop)，[Gitee Releases](https://gitee.com/zhenxiaoguo/dalanchong/releases)。授权后台是独立的 [license-admin 仓库](https://github.com/crazyniu/license-admin)。
 
 ## 在线更新
 
-侧栏底部显示当前版本和「检查更新」。启动时检查 Gitee Release，发现新版后显示 Release 说明；点击下载后显示进度，下载并校验成功后可重启安装。存在采集或邀约任务时先停止任务，安装前保存账号与记录。
+侧栏底部一行显示版本号和到期日期，分别点击打开软件更新和激活信息。每次启动自动检查 Gitee Release，发现新版后弹出升级提示和 Release 说明；同次运行关闭后不重复提示相同版本。点击下载后显示进度，下载并校验成功后可重启安装。存在采集或邀约任务时先停止任务，安装前保存账号与记录。
 
-`run.sh` 源码模式可以检查版本，下载安装由正式安装版提供；第一次安装需要使用发布的 DMG/NSIS 安装包。打包、Gitee 发布、GitHub Actions Secrets 和版本检查见 [发布说明](docs/RELEASE.md)。
+`run.sh` 源码模式可以检查版本，下载安装由正式安装版提供；第一次安装需要使用发布的 DMG/NSIS 安装包。0.2.x 迁移到 Tauri 需要手动安装新版，此后使用 Tauri 在线更新。打包、发布与版本检查见 [发布说明](docs/RELEASE.md)。
 
 ## 运行
 
@@ -18,7 +18,7 @@
 sh ./run.sh
 ```
 
-脚本自动安装项目依赖、构建最新界面并启动 Electron，无需打包或先开 Web 服务。需要本机已有 Node.js 和 pnpm。现有账号、Cookie 与采集记录已迁移至项目根目录的 `.local/ecommerce-assistant/`，启动脚本使用该目录；可通过 `ASSISTANT_TEST_DATA` 指定其他数据目录。也可在项目根目录运行 `sh ./run.sh`。
+脚本自动安装依赖并启动 Tauri/Vite。需要 Node 24、pnpm 11、Rust 1.94+、Xcode Command Line Tools。macOS 最低 14，Windows 使用系统 WebView2。日常数据目录保持项目根目录 `.local/ecommerce-assistant/`，可通过 ASSISTANT_TEST_DATA 指定隔离目录。
 
 只预览 Web 界面：
 
@@ -29,14 +29,9 @@ pnpm dev
 
 打开 http://127.0.0.1:5173 查看可点击 Web 原型。浏览器内使用演示账号和演示数据，点击「开始邀约」仅模拟任务，不发送真实邀约。
 
-```sh
-pnpm build
-pnpm desktop
-```
+Tauri 版先输入激活码，再使用真实平台网页与独立账号会话，首次启动没有演示账号。在「平台账号」添加账号后，通过独立浏览器弹窗登录，账号列表保持打开。
 
-Electron 版先输入激活码，再使用真实平台网页与独立账号会话，首次启动没有演示账号。在「平台账号」添加账号后，直接在内置网页登录。
-
-开发桌面界面时，保持 `pnpm dev` 运行，另开终端执行 `pnpm desktop:dev`。
+`pnpm desktop` 和 `pnpm desktop:dev` 均启动 Tauri 开发模式，端口 1420；使用系统应用数据目录时可直接运行这两个命令。
 
 ## 激活
 
@@ -54,21 +49,23 @@ Electron 版先输入激活码，再使用真实平台网页与独立账号会�
 - 采集列表：按平台保存、搜索、勾选、导出；可用同平台其他账号邀约已采集的达人。
 - 错误日志：只记录异常，保留账号、步骤、接口、HTTP 状态、业务码、请求 ID 和脱敏响应正文；邀约页及平台账号可查看、展开详情、导出。采集异常还会在网页右下方显示半透明浮层，可收起。
 - 邀约设置：点击「邀约所选」后选择发送账号，填写商品 ID、话术、联系方式、间隔与上限。记录支持筛选、详情、导出和人工核实。
-- 平台账号：添加、切换、打开、重新登录和移除。两平台的账号、配置和任务分别保存。
+- 平台账号：添加、打开、重新登录使用独立浏览器弹窗，不跳转邀约页；登录弹窗与该账号邀约网页共用持久会话。两平台的账号、配置和任务分别保存，备注与平台实际店名分开保留。
 
 先在原网页完成筛选并点击「开始采集」，采集结果逐批保存；采集结束或停止都不会发送邀约。打开「采集列表」勾选达人，点击「邀约所选」，选择发送账号并登录，填写配置后明确点击「开始邀约」。
 
 采集列表按平台共享并保留采集账号，去重和发送记录按邀约账号处理。任务复制启动时的筛选、所选达人或配置并绑定账号；切换页面或账号不会改变运行中的任务。关闭软件停止任务，重启保留采集列表、进度和历史，不自动重发。
 
+内置浏览器在平台页面加载前启用响应监听，只读取已适配的账号、额度、筛选、合作达人及商品接口。筛选以最新请求的成功响应为准；失败、旧响应或任务自身请求不会覆盖网页筛选。采集复用 60 秒内匹配当前筛选和页码的网页数据，过期时重新请求，并从第一页继续遍历；邀约仍在原网页环境内实时核验额度、商品与佣金。
+
+当前账号身份和额度随成功响应更新，账号备注不被覆盖。不同账号和不同网页的在途响应分别处理；登录窗口不改变采集条件，账号退出或变更会停止该账号任务。响应通过 document-start fetch/XHR 桥接观察，不依赖 Chrome DevTools。
+
 ## 登录数据
 
-每个账号使用 `persist:<平台>:<账号 ID>` 的 Electron Session。Cookie、Local Storage 等网站数据由对应会话保存；额外用 Electron safeStorage 加密保存 Cookie 快照，使没有到期时间的会话 Cookie 也可恢复。界面不暴露 Cookie，也不需要手工复制。
+macOS 每账号使用独立 WKWebsiteDataStore 标识，Windows 使用独立数据目录；登录窗口与该账号工作页共用会话。网页的 Cookie、Local Storage 由系统 WebView 保存，不显示或手动复制 Cookie。平台接口确认身份后才显示已登录。
 
-平台接口确认登录有效后显示「已登录」。失效时打开对应账号重新登录。移除账号清除对应网站会话和 Cookie 快照，历史记录保留。
+首次从 Electron 迁移需重新登录账号并输入原激活码，原 `deviceId` 与 `assistant-data/runtime.json` 记录保留。旧账号备注与邀约配置不会自动转入 WebKit，需要重新添加、填写；旧数据不删除。Tauri 将账号配置与运行记录同步保存到 `runtime.json`，供后续版本继续使用。
 
-旧 Cookie 快照无法解密时保留为 `.cookies.unreadable-时间戳`，继续打开该账号的持久网页会话；网站登录已失效时可直接重新登录。恢复失败原因写入错误日志。网页加载并完成账号绑定前，采集和邀约按钮保持不可用。
-
-采集列表、任务与记录位于系统应用数据目录中的 `assistant-data/runtime.json`，加密 Cookie 快照位于同目录。测试使用隔离目录，不包含真实账号数据。
+采集列表、任务、记录在数据目录的 assistant-data/runtime.json。重启时发送中记录转为待核实，运行任务转为停止，不自动重发。
 
 ## 当前平台适配范围
 
@@ -78,7 +75,7 @@ Electron 版先输入激活码，再使用真实平台网页与独立账号会�
 
 发送前先保存「发送中」记录；请求结果不明确时记为「待核实」并停止，不自动重试。确认平台结果后可在记录详情人工核实。
 
-错误日志独立保存在 `<Electron userData>/assistant-data/errors.ndjson`，不会被下一次任务覆盖；日常使用 `run.sh` 时位于项目根目录 `.local/ecommerce-assistant/assistant-data/errors.ndjson`。界面展示最近 1000 条，导出保留全部错误历史。正常进度、成功、跳过及手动停止不写日志。响应正文最多保留 8000 字并隐藏敏感字段，不记录请求 Cookie、联系方式或激活码。授权失效时仍可从应用菜单「显示 → 导出错误日志」导出。
+错误日志独立保存在 `<应用数据目录>/assistant-data/errors.ndjson`，不会被下一次任务覆盖；日常使用 `run.sh` 时位于项目根目录 `.local/ecommerce-assistant/assistant-data/errors.ndjson`。界面展示最近 1000 条，导出保留全部错误历史。正常进度、成功、跳过及手动停止不写日志。响应正文最多保留 8000 字并隐藏敏感字段，不记录请求 Cookie、联系方式或激活码。
 
 ## 检查与打包
 
@@ -86,25 +83,20 @@ Electron 版先输入激活码，再使用真实平台网页与独立账号会�
 pnpm lint
 pnpm build
 pnpm test:core
-pnpm test:license
-pnpm test:update
+pnpm test:native
 pnpm test:scripts
 pnpm package:mac
 pnpm package:win
 ```
 
-Electron Builder 将产物输出至 `dist-release/<platform>/<arch>/`。Mac 提供 DMG 与 ZIP，Windows 提供 x64 NSIS EXE；`pnpm package:mac` 使用本机架构。默认本地包无签名，正式 Mac 发布必须签名并公证。
+Tauri 产物位于 `dist-release/tauri/<platform>/<arch>/`。Mac 提供 DMG 和签名 app.tar.gz 更新包，Windows 提供 NSIS EXE。测试包与正式公证发布的区别见发布说明。
 
 图标及导出方法见 [应用图标](assets/icons/README.md)：白底小虫、Mac ICNS、Windows 多尺寸 ICO，已接入窗口、Dock、网页和打包配置。通用激活码后台继续使用自己的名称和钥匙图标。
 
 main / PR 的 CI 只运行检查与 Web 构建，不自动生成原生安装包。原生打包在手动发布工作流或版本 tag 工作流中执行，流程及所需 Secrets 见 [发布说明](docs/RELEASE.md)。
 
-已检查 1440×900、1280×800 下的页面布局与核心交互；已验证桌面启动、真实网页容器、同平台会话 Cookie 隔离、持久 Cookie 与会话 Cookie 的重启恢复。核心测试使用模拟接口，不发送消息。
-
-真实商家账号登录、登录失效后恢复以及真实邀约发送仍需账号联调；Cookie 存储测试不等于平台登录有效性验收。
-
 ## 来源
 
 - [Shadcn Admin](https://github.com/satnaing/shadcn-admin)，保留 MIT LICENSE。
 - [shadcn/ui MCP](https://ui.shadcn.com/docs/registry/mcp)：通过官方 MCP 查询组件示例和添加命令，使用现成 Sidebar、Card、Table、Dialog、Sheet、Tabs、Chart、Progress 等组件。
-- [Electron 持久会话](https://www.electronjs.org/docs/latest/api/session#sessionfrompartitionpartition-options)。
+- [Tauri WebView](https://docs.rs/tauri/latest/tauri/webview/struct.WebviewBuilder.html)。
