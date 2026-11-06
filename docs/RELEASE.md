@@ -33,4 +33,4 @@ Mac 正式发布必须 Developer ID 签名并公证，需要 APPLE_SIGNING_IDENT
 
 ## 单平台线上测试
 
-用户要求测试在线升级时，可先发布已在本机检查并签名的 Mac arm64 测试包；正文必须注明未公证及支持范围。完整发布仍检查三架构。`publish-local-test.yml` 从同版本 GitHub 草稿取本机产物，使用 `--targets darwin/arm64` 校验并发布 Gitee，公开下载核验后才更新 Tauri latest.json。不得把单平台测试写成三平台正式发布。
+用户要求测试在线下载时，手动运行 `publish-local-test.yml`，输入已有版本 tag。该流程在 GitHub Actions 构建 Mac arm64 测试包，使用临时应用签名和固定 Tauri 更新签名，以 `--targets darwin/arm64` 校验并发布 Gitee，公开下载核验后才更新 Tauri latest.json。Release 正文注明未公证及支持范围。完整发布仍检查三架构；不得把单平台测试写成三平台正式发布。

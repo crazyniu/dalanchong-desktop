@@ -1,9 +1,9 @@
-name: Publish signed local test to Gitee
+name: Build Mac test release to Gitee
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Locally verified Mac arm64 test version
+        description: Mac arm64 test version (vX.Y.Z)
         required: true
         type: string
 permissions:
@@ -12,8 +12,10 @@ concurrency:
   group: dalanchong-release
   cancel-in-progress: false
 jobs:
-  publish:
-    runs-on: ubuntu-latest
+  build-and-publish:
+    runs-on: macos-15
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,14 +25,24 @@ jobs:
           runtime: node@24
           version: 11.15.1
           install: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
       - run: pnpm install --frozen-lockfile
-      - name: Download locally signed draft assets
-        run: gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir dist-release/tauri/darwin/arm64
+      - run: node scripts/prepare-release.mjs --tag "$RELEASE_TAG"
+      - name: Build Mac arm64 test package
+        run: node scripts/package.mjs darwin arm64
         env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
-      - run: node scripts/publish-release.mjs --tag "$RELEASE_TAG" --artifacts dist-release/tauri --targets darwin/arm64
+          APPLE_SIGNING_IDENTITY: '-'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-darwin-arm64
+          path: dist-release/tauri/**
+          if-no-files-found: error
+      - name: Publish to Gitee
+        run: node scripts/publish-release.mjs --tag "$RELEASE_TAG" --artifacts dist-release/tauri --targets darwin/arm64
         env:
           GH_TOKEN: ${{ github.token }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-          RELEASE_TAG: ${{ inputs.tag }}
