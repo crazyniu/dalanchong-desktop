@@ -4,6 +4,10 @@ fn main() {
             "overlay_ready",
             "overlay_sync",
             "overlay_resize",
+            "toolbar_ready",
+            "toolbar_sync",
+            "toolbar_resize",
+            "toolbar_action",
             "license_state",
             "license_verify",
             "license_activate",
@@ -21,6 +25,7 @@ fn main() {
             "browser_hide",
             "browser_navigate",
             "browser_login",
+            "browser_finish_login",
             "browser_remove",
             "platform_eval",
             "platform_result",
@@ -28,4 +33,10 @@ fn main() {
         ]),
     ))
     .expect("Tauri 权限构建失败");
+    // tauri-build links the Windows manifest only into the app binary.
+    // The CI updater executable also needs Common Controls v6 to start.
+    if std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "windows" {
+        let resource = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("resource.lib");
+        println!("cargo:rustc-link-arg-examples={}", resource.display());
+    }
 }

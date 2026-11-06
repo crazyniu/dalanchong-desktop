@@ -1,0 +1,44 @@
+name: Check Windows update download
+on:
+  workflow_dispatch:
+    inputs:
+      current_version:
+        description: Current version for the download check
+        default: '0.3.0'
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  download:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/setup@v3
+        with:
+          runtime: node@24
+          version: 11.15.1
+          install: false
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Build the native download checker
+        run: cargo build --locked --release --manifest-path src-tauri/Cargo.toml --example update-download
+      - name: Download once from Gitee
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          & ./src-tauri/target/release/examples/update-download.exe
+          if ($LASTEXITCODE -ne 0) { throw "Download checker exit code: $LASTEXITCODE" }
+          $result = Get-Content "$env:ASSISTANT_TEST_DATA/result.json" -Raw | ConvertFrom-Json
+          if (!$result.downloadSignatureVerified) { throw 'Update download or signature verification failed' }
+        env:
+          ASSISTANT_TEST_DATA: ${{ runner.temp }}/dalanchong-update-download
+          UPDATE_CURRENT_VERSION: ${{ inputs.current_version }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-update-download-result
+          path: ${{ runner.temp }}/dalanchong-update-download/result.json
+          if-no-files-found: ignore
