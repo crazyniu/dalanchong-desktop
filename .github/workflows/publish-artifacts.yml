@@ -1,0 +1,89 @@
+# AI file map
+# Purpose: publish existing native artifacts without rebuilding or changing their signatures.
+# Entry: explicit workflow_dispatch selects a successful release workflow run and version tag.
+# Flow: verify the source run, download its artifacts, validate version/hash/signature metadata,
+# bind the version tag to the source head, and publish through the existing release script.
+# Invariants: only this repository's successful release.yml runs qualify; preflight precedes
+# tag creation and publication. GITHUB_TOKEN creates the tag without triggering another build.
+# Build-only Mac artifacts remain unnotarized; release notes must state their actual status.
+# Select runs whose source_ref matched their workflow head commit.
+
+name: Publish existing artifacts to Gitee
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful release.yml run built from its workflow head commit
+        required: true
+        type: string
+      tag:
+        description: Version tag (vX.Y.Z)
+        required: true
+        type: string
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: dalanchong-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      SOURCE_RUN_ID: ${{ inputs.run_id }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/setup@v3
+        with:
+          runtime: node@24
+          version: 11.15.1
+          install: false
+      - name: Verify source workflow run
+        id: source
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > "$RUNNER_TEMP/source-run.json"
+          node --input-type=module <<'NODE'
+          import { readFile, appendFile } from 'node:fs/promises'
+          import path from 'node:path'
+          const run = JSON.parse(await readFile(path.join(process.env.RUNNER_TEMP, 'source-run.json'), 'utf8'))
+          if (run.conclusion !== 'success' || run.path !== '.github/workflows/release.yml' || run.head_repository.full_name !== process.env.GITHUB_REPOSITORY)
+            throw Error('Source must be a successful release.yml run from this repository')
+          await appendFile(process.env.GITHUB_OUTPUT, `head_sha=${run.head_sha}\n`)
+          NODE
+      - uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          pattern: release-*
+          path: dist-release/tauri
+          merge-multiple: true
+      - name: Check release inputs and artifacts
+        run: |
+          node scripts/prepare-release.mjs --tag "$RELEASE_TAG"
+          node scripts/publish-release.mjs --tag "$RELEASE_TAG" --artifacts dist-release/tauri --check
+      - name: Bind version tag to source commit
+        env:
+          SOURCE_HEAD_SHA: ${{ steps.source.outputs.head_sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process'
+          const repo = process.env.GITHUB_REPOSITORY
+          const tag = process.env.RELEASE_TAG
+          const sha = process.env.SOURCE_HEAD_SHA
+          const refs = JSON.parse(execFileSync('gh', ['api', `repos/${repo}/git/matching-refs/tags/${tag}`], { encoding: 'utf8' }))
+          const existing = refs.find((entry) => entry.ref === `refs/tags/${tag}`)
+          if (existing) {
+            if (existing.object.sha !== sha) throw Error(`${tag} already points to a different source commit`)
+          } else {
+            execFileSync('gh', ['api', `repos/${repo}/git/refs`, '-f', `ref=refs/tags/${tag}`, '-f', `sha=${sha}`], { stdio: ['ignore', 'pipe', 'pipe'] })
+          }
+          NODE
+      - name: Publish to Gitee and GitHub
+        run: node scripts/publish-release.mjs --tag "$RELEASE_TAG" --artifacts dist-release/tauri
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}

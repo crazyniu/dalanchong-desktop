@@ -25,7 +25,7 @@ Chrome 账号数据位于 `assistant-data/chrome-profiles/<UUID>/`，账号列�
 
 本机更新签名私钥在忽略目录 `.local/tauri-signing/updater.key`。该文件必须妥善备份；不能删除后为已发布版本随意换公钥。正式发布通过 `TAURI_SIGNING_PRIVATE_KEY` 提供对应私钥，密码通过 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 提供。公钥在 `src-tauri/tauri.conf.json`，不是秘密。
 
-Mac 正式发布必须 Developer ID 签名并公证，需要 APPLE_SIGNING_IDENTITY、APPLE_API_KEY_PATH、APPLE_API_KEY_ID、APPLE_API_ISSUER。测试包可仅本机签名，需如实标注没有公证。
+Mac 公证发布路径使用 Developer ID 签名并公证，需要 APPLE_SIGNING_IDENTITY、APPLE_API_KEY_PATH、APPLE_API_KEY_ID、APPLE_API_ISSUER。用户已授权发布现有未公证包时，使用下述现有构建产物发布流程，Release 说明保留 Mac 无 Developer ID 签名及公证、Windows 无代码签名等实际限制；Tauri 更新签名继续保留。
 
 ## GitHub Actions 手动打包
 
@@ -33,7 +33,17 @@ Mac 正式发布必须 Developer ID 签名并公证，需要 APPLE_SIGNING_IDENT
 
 工作流仅生成 Apple 芯片 Mac arm64 和 Windows x64 安装包，从运行页面的 Artifacts 下载对应 `release-darwin-arm64` 或 `release-win32-x64`。仅打包时不导入 Apple 发布证书、不公证，也不发布 Release 或更新 `latest.json`；Mac 包须按未公证包交付。正式版本标签触发或 `publish=true` 仍使用原有签名、公证和发布流程，`source_ref` 不参与正式发布。
 
-## 发布流程
+## 发布现有 GitHub Actions 构建产物
+
+用户要求发布已构建版本时，运行 `publish-artifacts.yml`，填写成功构建的 `run_id` 和对应版本 `tag`（例如 `v0.3.2`）；所选构建的 `source_ref` 须与该次运行的 `head_sha` 相同。该流程复用已有产物，不重复构建，也不补做 Developer ID 签名或公证。
+
+1. 从指定成功构建取得 `release-darwin-arm64` 和 `release-win32-x64`，使用原构建的源码 SHA 创建版本 tag。
+2. 检查版本与中文更新说明，并核对两个目标的文件、大小、哈希和 Tauri 更新签名文件。
+3. 将同一批附件及中文说明发布到 Gitee 和 GitHub；完整上传并核对附件后更新 `updates/tauri/latest.json`。
+
+现有未公证包的发布沿用产物本身的签名状态，更新说明须如实列出限制；完成发布不代表完成真实平台或安装升级验收。
+
+## 重新构建并发布
 
 1. `pnpm release:prepare --tag v<version>` 检查中文说明及版本。
 2. 分别构建 Apple 芯片 Mac arm64 和 Windows x64。
