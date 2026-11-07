@@ -1,3 +1,15 @@
+/**
+ * AI module map
+ * Purpose: publish prepared native artifacts and update metadata to the configured repositories.
+ * Entry: publishRelease and CLI flags; helper exports support metadata/access inspection.
+ * Flow: prepareRelease validates local inputs; upload/reconcile Gitee attachments, verify
+ * their public downloads, rewrite updater URLs, and synchronize release text/metadata.
+ * Side effects: creates remote release data and commits publication metadata through Git.
+ * Invariants: upload assets before changing latest pointers; public URLs contain no token;
+ * GitHub/Gitee use the same versioned Chinese notes. Tokens come only from environment.
+ * Run publication/access operations only within an explicitly authorized release task.
+ */
+
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { openAsBlob } from 'node:fs'

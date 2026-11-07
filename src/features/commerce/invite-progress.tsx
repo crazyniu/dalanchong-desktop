@@ -1,31 +1,33 @@
-import { CircleCheck, CirclePause, LoaderCircle, Square, X } from 'lucide-react'
-import { create } from 'zustand'
+/**
+ * AI module map
+ * Purpose: display fixed invitation progress for one or multiple running account tasks.
+ * Entry: InviteProgress receives task snapshots and emits account stop actions;
+ * TaskOverlayContent is also the payload contract used by the native logs view.
+ * State: BrowserLayer supplies running invitation tasks from every platform, independently
+ * of the active route, account, or dialog. The card has no dismiss action and remains
+ * visible until all supplied tasks complete or stop.
+ * Invariants: stop identifies a concrete account; presentation never owns runtime jobs.
+ * Progress/counts come from runtime tasks, not local timers.
+ * Invitation payloads contain display fields only; task logs and collection filters
+ * stay with their owners instead of crossing the native overlay bridge on every tick.
+ */
+
+import { LoaderCircle, Square } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
+import { PlatformIcon } from './shared'
 import type { Platform, Task } from './types'
 
-export const useInviteProgressVisibility = create<{
-  dismissed: string[]
-  dismiss: (keys: string[]) => void
-  show: (keys: string[]) => void
-}>((set) => ({
-  dismissed: [],
-  dismiss: (keys) => set((s) => ({ dismissed: [...s.dismissed, ...keys] })),
-  show: (keys) =>
-    set((s) => ({
-      dismissed: s.dismissed.filter((key) => !keys.includes(key)),
-    })),
-}))
-
+type InviteProgressTask = Pick<Task,
+  'accountId' | 'startedAt' | 'processed' | 'total' | 'success' |
+  'skipped' | 'failed' | 'review' | 'current'
+>
 export type InviteProgressState = {
-  platform: Platform
-  tasks: { name: string; task: Task }[]
+  tasks: { name: string; platform: Platform; task: InviteProgressTask }[]
 }
 
-export type InviteProgressAction =
-  | { type: 'close' }
-  | { type: 'stop'; accountId: string }
+export type InviteProgressAction = { type: 'stop'; accountId: string }
 
 export type TaskOverlayContent =
   | { kind: 'collect'; task: Task }
@@ -40,8 +42,6 @@ export function InviteProgress({
   onAction: (action: InviteProgressAction) => void
   className?: string
 }) {
-  const running = state.tasks.some(({ task }) => task.status === 'running')
-  const stopped = state.tasks.some(({ task }) => task.status === 'stopped')
   const totals = state.tasks.reduce(
     (sum, { task }) => ({
       processed: sum.processed + task.processed,
@@ -64,39 +64,20 @@ export function InviteProgress({
       )}
     >
       <div className='flex items-center gap-2 px-4 pt-3'>
-        {running ? (
-          <LoaderCircle className='size-4 shrink-0 motion-safe:animate-spin' />
-        ) : stopped ? (
-          <CirclePause className='size-4 shrink-0 text-amber-700' />
-        ) : (
-          <CircleCheck className='size-4 shrink-0 text-emerald-700' />
-        )}
+        <LoaderCircle className='size-4 shrink-0 motion-safe:animate-spin' />
         <h3 className='text-sm font-semibold' aria-live='polite'>
-          {running ? '正在邀约' : stopped ? '邀约已停止' : '邀约已完成'}
+          正在邀约
         </h3>
         <span className='ml-auto text-sm text-muted-foreground tabular-nums'>
-          {running
-            ? `${totals.processed} / ${totals.total}`
-            : `已处理 ${totals.processed} 位`}
+          {totals.processed} / {totals.total}
         </span>
-        <Button
-          size='icon'
-          variant='ghost'
-          className='-mr-1 size-8 shrink-0 text-muted-foreground'
-          aria-label='关闭邀约进度'
-          onClick={() => onAction({ type: 'close' })}
-        >
-          <X />
-        </Button>
       </div>
       <div className='space-y-3 px-4 pt-2 pb-4'>
-        {running && (
-          <Progress
-            aria-label='邀约处理进度'
-            value={totals.total ? (totals.processed / totals.total) * 100 : 0}
-            className='h-1.5'
-          />
-        )}
+        <Progress
+          aria-label='邀约处理进度'
+          value={totals.total ? (totals.processed / totals.total) * 100 : 0}
+          className='h-1.5'
+        />
         <div className='flex flex-wrap gap-x-4 gap-y-1 text-sm tabular-nums'>
           <span className='font-medium text-emerald-700'>
             已邀约 {totals.success}
@@ -110,8 +91,9 @@ export function InviteProgress({
           )}
         </div>
         <div className='max-h-40 space-y-2 overflow-y-auto'>
-          {state.tasks.map(({ name, task }) => (
+          {state.tasks.map(({ name, platform, task }) => (
             <div key={task.accountId} className='flex items-center gap-3'>
+              <PlatformIcon platform={platform} />
               <div className='min-w-0 flex-1 text-sm'>
                 <div className='flex items-center gap-2'>
                   <span className='truncate font-medium' title={name}>
@@ -119,11 +101,7 @@ export function InviteProgress({
                   </span>
                   {state.tasks.length > 1 && (
                     <span className='shrink-0 text-muted-foreground tabular-nums'>
-                      {task.status === 'running'
-                        ? `${task.processed} / ${task.total}`
-                        : task.status === 'done'
-                          ? '已完成'
-                          : '已停止'}
+                      {task.processed} / {task.total}
                     </span>
                   )}
                 </div>
@@ -134,18 +112,16 @@ export function InviteProgress({
                   {task.current}
                 </p>
               </div>
-              {task.status === 'running' && (
-                <Button
-                  size='sm'
-                  variant='outline'
-                  onClick={() =>
-                    onAction({ type: 'stop', accountId: task.accountId })
-                  }
-                >
-                  <Square className='size-3' />
-                  停止
-                </Button>
-              )}
+              <Button
+                size='sm'
+                variant='outline'
+                onClick={() =>
+                  onAction({ type: 'stop', accountId: task.accountId })
+                }
+              >
+                <Square className='size-3' />
+                停止
+              </Button>
             </div>
           ))}
         </div>

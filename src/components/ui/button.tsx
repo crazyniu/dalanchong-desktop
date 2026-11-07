@@ -1,3 +1,12 @@
+/**
+ * AI module map
+ * Purpose: centralize button variants, sizing, disabled styling, and composed rendering.
+ * Entry: Button and buttonVariants; asChild uses Radix Slot for links/other elements.
+ * Flow: variants become classes while native event/ARIA props pass to the rendered control.
+ * Invariant: callers own handlers and must set form type intentionally; visual disabling
+ * is not a substitute for native authorization or task-state checks.
+ */
+
 import * as React from 'react'
 import { Slot } from '@radix-ui/react-slot'
 import { cva, type VariantProps } from 'class-variance-authority'

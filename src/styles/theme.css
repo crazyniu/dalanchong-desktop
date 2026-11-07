@@ -1,3 +1,12 @@
+/**
+ * AI module map
+ * Purpose: define light/dark semantic design tokens and expose them to Tailwind.
+ * Entry: styles/index.css imports this file before application-specific refinements.
+ * Flow: :root and .dark set colors/radii; @theme inline maps tokens to generated utilities.
+ * Invariant: preserve token names consumed by Shadcn components and charts; change visual
+ * values here instead of introducing competing color definitions in business logic.
+ */
+
 :root {
   --radius: 0.625rem;
   --background: oklch(1 0 0);

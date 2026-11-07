@@ -1,3 +1,12 @@
+/**
+ * AI module map
+ * Purpose: provide side/top/bottom panels with the same explicit-close policy as dialogs.
+ * Entry: Sheet primitives wrap Radix Dialog with side-dependent transitions and layout.
+ * Flow: caller open state controls a portaled overlay and panel; Close is an explicit action.
+ * Invariants: outside interaction and Escape cannot dismiss content. Preserve sheet-content
+ * markers used by native BrowserLayer and keep form/job state outside the wrapper.
+ */
+
 import * as React from 'react'
 import * as SheetPrimitive from '@radix-ui/react-dialog'
 import { XIcon } from 'lucide-react'

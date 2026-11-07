@@ -1,3 +1,12 @@
+/**
+ * AI module map
+ * Purpose: configure the global Sonner toast renderer with application theme tokens.
+ * Entry: Toaster is mounted by main.tsx and accepts normal Sonner props.
+ * Flow: useTheme supplies the theme; CSS variables align message backgrounds/text/borders.
+ * Invariant: this renderer does not own persistent invitation progress, which belongs to
+ * invite-progress.tsx; a toast must not become the authoritative result record.
+ */
+
 import { Toaster as Sonner, ToasterProps } from 'sonner'
 import { useTheme } from '@/context/theme-provider'
 

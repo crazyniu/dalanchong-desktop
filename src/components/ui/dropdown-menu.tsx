@@ -1,3 +1,12 @@
+/**
+ * AI module map
+ * Purpose: compose accessible action menus, submenus, checkbox/radio items, and shortcuts.
+ * Entry: named DropdownMenu wrappers preserve Radix menu props and data slots.
+ * Flow: Radix manages focus/navigation/selection; callers own item callbacks and checked state.
+ * Invariant: preserve dropdown-menu-content markers, which toolbar-overlay.tsx measures
+ * to expand native toolbar bounds while menus are open. No business actions execute here.
+ */
+
 import * as React from 'react'
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
 import { CheckIcon, ChevronRightIcon, CircleIcon } from 'lucide-react'

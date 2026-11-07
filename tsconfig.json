@@ -1,3 +1,11 @@
+/**
+ * AI file map
+ * Purpose: connect frontend and Vite TypeScript projects for build-mode type analysis.
+ * Entry: TypeScript follows references to tsconfig.app.json and tsconfig.node.json.
+ * Invariant: this is JSONC, not runtime application data. Keep the @ source alias aligned
+ * with Vite and preserve the split between browser and Node compilation environments.
+ */
+
 {
   "files": [],
   "references": [

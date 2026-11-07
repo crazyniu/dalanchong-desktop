@@ -1,8 +1,15 @@
+/**
+ * AI file map
+ * Purpose: recommend optional editor integrations for formatting, CSS, and lint.
+ * Entry: VS Code reads this JSONC recommendation list; it does not install or run tools.
+ * Invariant: editor recommendations do not authorize automatic checks; testing and
+ * acceptance are performed by the user unless explicitly requested.
+ */
+
 {
   "recommendations": [
     "esbenp.prettier-vscode",
     "bradlc.vscode-tailwindcss",
-    "dbaeumer.vscode-eslint",
-    "vitest.explorer"
+    "dbaeumer.vscode-eslint"
   ]
 }

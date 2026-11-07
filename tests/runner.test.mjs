@@ -1,6 +1,16 @@
+/**
+ * AI module map
+ * Purpose: existing InviteRunner coverage for collection, deduplication, pacing, and uncertain sends.
+ * Entry: node:test cases inject synthetic APIs, state, and save callbacks into the runner.
+ * Flow: observe persisted task/record changes while faking database commits, send, cancellation, and
+ * save failures. prepareInvite checks use fixture product/commission data.
+ * Boundary: these scenarios model behavior only; do not substitute test accounts or outcomes
+ * for production state and do not execute/extend the suite during comment maintenance.
+ */
+
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { prepareInvite } from '../src/desktop-runtime/platform.mjs'
+import { prepareInvite, urls } from '../src/desktop-runtime/platform.mjs'
 import {
   alreadyHandled,
   InviteRunner,
@@ -16,7 +26,9 @@ const config = {
   maxInvites: 1,
 }
 const capture = {
-  search: {
+  list: {
+    mode: 'dy-square',
+    method: 'POST',
     path: '/square_pc_api/square/search_feed_author',
     body: {
       filters: { keyword: '灭鼠', fans_min: 10000 },
@@ -26,27 +38,6 @@ const capture = {
     },
   },
 }
-function quota(remaining = 5) {
-  return {
-    data: {
-      shop_gmv_type: 1,
-      right_list_v2: [],
-      online_rights: [
-        {
-          used_l01: 0,
-          total_l01: remaining,
-          used_l23: 0,
-          total_l23: 0,
-          used_l45: 0,
-          total_l45: 0,
-          used_l67: 0,
-          total_l67: 0,
-        },
-      ],
-    },
-  }
-}
-
 const talent = {
   id: 'person',
   uid: '1',
@@ -60,22 +51,66 @@ function state(talents = []) {
   return { records: [], tasks: {}, collections: [], talents }
 }
 
-test('collection preserves filters, persists a deduplicated shared list, and never checks quota or sends', async () => {
+// This fake models only the runner's incremental database boundary. The mutable
+// arrays belong to the fake database, and saved/query rows cross it as clones.
+function persistence(data, afterSave = async () => {}) {
+  return {
+    query: async ({ kind, platform, accountId, ids }) => {
+      const talents = data.talents.filter((row) => row.platform === platform &&
+        row.sourceAccountId === accountId && ids.includes(row.id))
+      if (kind === 'talent_ids') return talents.map((row) => row.id)
+      if (kind === 'talent_batch') return structuredClone(talents)
+      assert.equal(kind, 'history')
+      return structuredClone(data.records.filter((row) => row.platform === platform &&
+        row.accountId === accountId && ids.includes(row.talentId)))
+    },
+    save: async (changes) => {
+      let added = 0
+      const talents = []
+      const updatedIds = []
+      for (const row of changes.talents || []) {
+        const index = data.talents.findIndex((existing) => existing.platform === row.platform &&
+          existing.sourceAccountId === row.sourceAccountId &&
+          (existing.id === row.id || row.uid && existing.uid === row.uid))
+        const saved = structuredClone(index === -1 ? row : { ...row, id: data.talents[index].id })
+        if (index === -1) {
+          data.talents.unshift(saved)
+          added++
+        } else {
+          data.talents[index] = saved
+          updatedIds.push(saved.id)
+        }
+        talents.push(saved)
+      }
+      for (const field of ['records', 'collections']) {
+        for (const row of changes[field] || []) {
+          const index = data[field].findIndex((existing) => existing.id === row.id)
+          if (index === -1) data[field].unshift(structuredClone(row))
+          else data[field][index] = structuredClone(row)
+        }
+      }
+      if (changes.deleteRecordIds)
+        data.records = data.records.filter((row) => !changes.deleteRecordIds.includes(row.id))
+      await afterSave(changes)
+      return { talents, added, updatedIds }
+    },
+  }
+}
+
+test('collection preserves filters, persists a deduplicated account list, and never checks quota or sends', async () => {
   const requests = []
   const saves = []
   const data = state()
   const runner = new InviteRunner({
     data,
-    save: async () => saves.push(structuredClone(data)),
+    ...persistence(data, async () => { saves.push(structuredClone(data)) }),
     emit: () => {},
-    onQuota: () => {
-      throw Error('采集不得读取额度')
-    },
     getConnection: () => ({
       platform: 'douyin',
+      url: urls.douyin,
       capture,
       api: async (path, body) => {
-        assert.equal(path, capture.search.path)
+        assert.equal(path, capture.list.path)
         requests.push(body)
         return {
           data: {
@@ -162,27 +197,33 @@ test('product commission settings from the platform are retained in the outgoing
     { ratio: 20 }
   )
 })
-test('zero quota stops before sending selected collected talents', async () => {
+test('quota exhaustion is decided by the send response without proactively querying quota', async () => {
   const calls = []
   const data = state([{ ...talent }])
   const runner = new InviteRunner({
     data,
-    save: async () => {},
+    ...persistence(data),
     emit: () => {},
-    onQuota: () => {},
     getConnection: () => ({
       platform: 'douyin',
+      url: urls.douyin,
       capture,
       api: async (path) => {
         calls.push(path)
-        return quota(0)
+        if (path.includes('account_check'))
+          return { data: { is_passed: true, connection_type: 1 } }
+        if (path.includes('promotion/list'))
+          return { data: { promotion_list: [{ product_id: '123' }] } }
+        assert.equal(path, '/connection/pc/im/invite/card/send')
+        throw Object.assign(Error('额度已用完'), { rejected: true })
       },
     }),
   })
   await runner.start('a', config, ['person'])
   await runner.jobs.get('a')?.promise
-  assert.equal(calls.length, 1)
-  assert.equal(data.records.length, 0)
+  assert.equal(calls.length, 3)
+  assert.equal(data.records.length, 1)
+  assert.equal(data.records[0].status, 'failed')
   assert.equal(data.tasks.a.status, 'stopped')
   assert.match(data.tasks.a.logs[0].message, /额度已用完/)
 })
@@ -198,7 +239,6 @@ test('uncertain send is persisted as review and is not resent on the next run', 
   }
   let sends = 0
   const api = async (path) => {
-    if (path.includes('shop_contact_rights_info')) return quota()
     if (path.includes('search_feed_author'))
       return {
         data: {
@@ -218,11 +258,10 @@ test('uncertain send is persisted as review and is not resent on the next run', 
   }
   const runner = new InviteRunner({
     data,
-    save: async () => saves.push(structuredClone(data)),
+    ...persistence(data, async () => { saves.push(structuredClone(data)) }),
     emit: () => {},
-    onQuota: () => {},
     onLog: (entry) => errors.push(entry),
-    getConnection: () => ({ platform: 'douyin', capture, api }),
+    getConnection: () => ({ platform: 'douyin', url: urls.douyin, capture, api }),
   })
   await runner.start('a', config, ['person'])
   await runner.jobs.get('a')?.promise
@@ -248,19 +287,17 @@ test('stopping collection retains the first persisted batch and never sends', as
   let requests = 0
   runner = new InviteRunner({
     data,
-    save: async () => {
+    ...persistence(data, async () => {
       if (data.talents.length && data.tasks.a.status === 'running')
-        runner.stop('a')
-    },
+        await runner.stop('a')
+    }),
     emit: () => {},
-    onQuota: () => {
-      throw Error('采集不得读取额度')
-    },
     getConnection: () => ({
       platform: 'douyin',
+      url: urls.douyin,
       capture,
       api: async (path) => {
-        assert.equal(path, capture.search.path)
+        assert.equal(path, capture.list.path)
         requests++
         return {
           data: {
@@ -286,7 +323,7 @@ test('stopping collection retains the first persisted batch and never sends', as
   assert.equal(data.records.length, 0)
 })
 
-test('account B sends only selected talents collected by account A without searching again', async () => {
+test('account B rejects account A talents and sends only its own selected talent without searching again', async () => {
   const data = state([
     { ...talent },
     { ...talent, id: 'unselected', uid: '2' },
@@ -294,6 +331,7 @@ test('account B sends only selected talents collected by account A without searc
   ])
   data.records.push({
     accountId: 'a',
+    platform: 'douyin',
     talentId: 'person',
     status: 'success',
     time: new Date().toISOString(),
@@ -301,9 +339,8 @@ test('account B sends only selected talents collected by account A without searc
   const sends = []
   const runner = new InviteRunner({
     data,
-    save: async () => {},
+    ...persistence(data),
     emit: () => {},
-    onQuota: () => {},
     getConnection: (accountId) => {
       assert.equal(accountId, 'b')
       return {
@@ -311,7 +348,6 @@ test('account B sends only selected talents collected by account A without searc
         capture: {},
         api: async (path, body) => {
           assert.ok(!path.includes('search_feed_author'))
-          if (path.includes('shop_contact_rights_info')) return quota()
           if (path.includes('account_check'))
             return { data: { is_passed: true, connection_type: 1 } }
           if (path.includes('promotion/list'))
@@ -323,31 +359,35 @@ test('account B sends only selected talents collected by account A without searc
       }
     },
   })
+  await assert.rejects(runner.start('b', config, ['person']), /当前账号/)
+  assert.equal(sends.length, 0)
+  assert.equal(runner.jobs.has('b'), false)
+  data.talents.push({ ...talent, sourceAccountId: 'b', uid: '3' })
   await runner.start('b', config, ['person'])
   await runner.jobs.get('b').promise
-  assert.deepEqual(sends, ['1'])
+  assert.deepEqual(sends, ['3'])
   assert.equal(data.records[0].accountId, 'b')
   assert.equal(data.records[0].status, 'success')
   assert.equal(data.tasks.b.kind, 'invite')
   assert.equal(data.tasks.b.total, 1)
-  assert.equal(data.talents.length, 3)
+  assert.equal(data.talents.length, 4)
 })
 
 test('collection errors retain the saved batch and the specific response in error-only logs', async () => {
   const data = state()
   const response = {
-    path: capture.search.path,
+    path: capture.list.path,
     method: 'POST',
     status: 401,
     body: '{"message":"登录过期"}',
   }
   const runner = new InviteRunner({
     data,
-    save: async () => {},
+    ...persistence(data),
     emit: () => {},
-    onQuota: () => {},
     getConnection: () => ({
       platform: 'douyin',
+      url: urls.douyin,
       capture,
       api: async (_path, body) => {
         if (body.page === 2)
@@ -381,13 +421,13 @@ test('a failed initial save releases the account and reports the cause before an
   let calls = 0
   const runner = new InviteRunner({
     data,
-    save: async () => {
+    ...persistence(data, async () => {
       if (!writable) throw Error('ENOSPC: disk full')
-    },
+    }),
     emit: () => {},
-    onQuota: () => {},
     getConnection: () => ({
       platform: 'douyin',
+      url: urls.douyin,
       capture,
       api: async () => {
         calls++
@@ -413,14 +453,14 @@ test('a background final-save failure is visible and releases the task instead o
   const errors = []
   const runner = new InviteRunner({
     data,
-    save: async () => {
-      if (++saves > 1) throw Error('EACCES: runtime.json')
-    },
+    ...persistence(data, async () => {
+      if (++saves > 1) throw Error('EACCES: assistant.sqlite3')
+    }),
     emit: () => {},
-    onQuota: () => {},
     onLog: (entry) => errors.push(entry),
     getConnection: () => ({
       platform: 'douyin',
+      url: urls.douyin,
       capture,
       api: async () => ({ data: { has_more: false, list: [] } }),
     }),

@@ -1,6 +1,34 @@
+/**
+ * AI module map
+ * Purpose: own React-facing commerce state, preferences, and the browser-only demo model.
+ * Entry: useCommerce exposes account/config/filter/selection actions and initialize;
+ * collectDemo/startDemo/stopDemo drive simulated tasks only when desktop is absent.
+ * Flow: native runtime events hydrate database revision/counts, bounded logs, progress, and
+ * account patches; Zustand persistence retains account remarks and UI preferences/configuration,
+ * which incremental database commits also read from the persisted preferences.
+ * Runtime patches preserve unchanged domains; task events replace only their account/kind
+ * entry. Tasks and demo timers use `${accountId}:${kind}` keys so collection and invitation
+ * progress, completion, and cancellation remain independent within an account.
+ * Only changed preference references trigger localStorage serialization.
+ * Event snapshots must be treated as read-only.
+ * State: per-platform selection and per-account config coexist with account-owned
+ * collected talents. Timers below the store belong only to preview simulation.
+ * Hot replacement releases this module's desktop listener and demo timers; native
+ * jobs belong to the runtime and continue independently of the replaced React store.
+ * Successful account removal drops its form preferences and ephemeral task/capture state;
+ * native runtime removal commits the same preference change while retaining history.
+ * Demo collection activity mirrors native batch events and stays in non-persisted tasks.
+ * Demo invitations process the first row immediately and retain the talent UID in history.
+ * Their queue excludes any existing account/platform invitation record before calculating
+ * task totals, matching native invitation preparation without creating skipped history.
+ * Invariants: native runs begin without seeded demo accounts; do not substitute demo
+ * login, quota, or send outcomes for platform evidence. Keep durable native history in
+ * runtime.mjs/database.rs and preserve account-scoped settings when switching screens.
+ */
+
 import { toast } from 'sonner'
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { createJSONStorage, persist, type PersistStorage } from 'zustand/middleware'
 import { desktop, type CollectionEvent } from './desktop'
 import type {
   Account,
@@ -13,6 +41,7 @@ import type {
   InviteRecord,
   Platform,
   Task,
+  TaskLog,
 } from './types'
 
 export const defaults: InviteConfig = {
@@ -42,6 +71,7 @@ const shops: Account[] = [
     savedAt: new Date().toISOString(),
     quota: 286,
     limit: 500,
+    quotaObservedAt: new Date().toISOString(),
   },
   {
     id: 'ks-2',
@@ -53,6 +83,7 @@ const shops: Account[] = [
     savedAt: new Date().toISOString(),
     quota: 412,
     limit: 500,
+    quotaObservedAt: new Date().toISOString(),
   },
   {
     id: 'dy-1',
@@ -64,6 +95,7 @@ const shops: Account[] = [
     savedAt: new Date().toISOString(),
     quota: 168,
     limit: 300,
+    quotaObservedAt: new Date().toISOString(),
   },
   {
     id: 'dy-2',
@@ -75,6 +107,7 @@ const shops: Account[] = [
     savedAt: new Date(Date.now() - 86400000 * 6).toISOString(),
     quota: 74,
     limit: 100,
+    quotaObservedAt: new Date().toISOString(),
   },
 ]
 const names = [
@@ -180,6 +213,8 @@ function seedCollections(): CollectionEvent[] {
   return [...grouped.values()]
 }
 type CommerceState = {
+  dataRevision: number
+  talentCounts: Record<string, number>
   accounts: Account[]
   records: InviteRecord[]
   logs: DiagnosticLog[]
@@ -194,16 +229,48 @@ type CommerceState = {
   saveConfig: (id: string, config: InviteConfig) => void
   saveFilters: (id: string, filters: Filters) => void
   addAccount: (platform: Platform, name: string) => string
+  renameAccount: (id: string, name: string) => void
   login: (id: string) => void
   removeAccount: (id: string) => Promise<void>
   resolveRecord: (id: string, sent: boolean) => Promise<void>
   clearLogs: (platform: Platform | 'all', accountId: string) => Promise<void>
-  clearTalents: (platform: Platform, ids?: string[]) => Promise<void>
+  clearTalents: (
+    platform: Platform,
+    accountId: string,
+    ids?: string[]
+  ) => Promise<void>
   clearRecords: (ids: string[]) => Promise<void>
+}
+type CommercePreferences = Pick<
+  CommerceState, 'accounts' | 'configs' | 'filters' | 'selected'
+> &
+  Partial<Pick<CommerceState, 'records' | 'logs' | 'talents' | 'collections'>>
+const jsonStorage = createJSONStorage<CommercePreferences>(() => localStorage)!
+let savedPreferences: CommercePreferences | undefined
+const preferenceStorage: PersistStorage<CommercePreferences> = {
+  getItem: (name) => jsonStorage.getItem(name),
+  setItem: (name, value) => {
+    const next = value.state
+    if (
+      savedPreferences &&
+      (Object.keys(next) as (keyof CommercePreferences)[])
+        .every((key) => next[key] === savedPreferences![key])
+    ) return
+    // Native task/capture events do not change preferences. Avoid serializing
+    // and synchronously rewriting localStorage on every such state update.
+    jsonStorage.setItem(name, value)
+    savedPreferences = next
+  },
+  removeItem: (name) => {
+    savedPreferences = undefined
+    return jsonStorage.removeItem(name)
+  },
 }
 export const useCommerce = create<CommerceState>()(
   persist(
     (set, get) => ({
+      dataRevision: 0,
+      talentCounts: {},
       accounts: desktop ? [] : shops,
       records: desktop ? [] : seedRecords(),
       collections: desktop ? [] : seedCollections(),
@@ -236,13 +303,19 @@ export const useCommerce = create<CommerceState>()(
               sessionId: `persist:${platform}:${id}`,
               status: 'offline',
               savedAt: '',
-              quota: 0,
-              limit: 0,
+              quota: null,
+              limit: null,
             },
           ],
         }))
         return id
       },
+      renameAccount: (id, name) =>
+        set((s) => ({
+          accounts: s.accounts.map((account) =>
+            account.id === id ? { ...account, name } : account
+          ),
+        })),
       login: (id) =>
         set((s) => ({
           accounts: s.accounts.map((a) =>
@@ -255,6 +328,7 @@ export const useCommerce = create<CommerceState>()(
                     a.shopId === '待登录' ? `DEMO${id.slice(0, 6)}` : a.shopId,
                   quota: a.limit ? a.quota : 300,
                   limit: a.limit || 300,
+                  quotaObservedAt: new Date().toISOString(),
                 }
               : a
           ),
@@ -263,18 +337,33 @@ export const useCommerce = create<CommerceState>()(
         const a = get().accounts.find((a) => a.id === id)!
         if (desktop) await desktop.removeAccount(id, a.platform)
         else stopDemo(id)
-        set((s) => ({
-          accounts: s.accounts.filter((a) => a.id !== id),
-          selected: {
-            ...s.selected,
-            [a.platform]:
-              s.selected[a.platform] === id
-                ? s.accounts.find(
-                    (x) => x.platform === a.platform && x.id !== id
-                  )?.id || ''
-                : s.selected[a.platform],
-          },
-        }))
+        set((s) => {
+          const captured = { ...s.captured }
+          const configs = { ...s.configs }
+          const filters = { ...s.filters }
+          const tasks = { ...s.tasks }
+          delete captured[id]
+          delete configs[id]
+          delete filters[id]
+          delete tasks[`${id}:collect`]
+          delete tasks[`${id}:invite`]
+          return {
+            accounts: s.accounts.filter((a) => a.id !== id),
+            captured,
+            configs,
+            filters,
+            tasks,
+            selected: {
+              ...s.selected,
+              [a.platform]:
+                s.selected[a.platform] === id
+                  ? s.accounts.find(
+                      (x) => x.platform === a.platform && x.id !== id
+                    )?.id || ''
+                  : s.selected[a.platform],
+            },
+          }
+        })
       },
       clearLogs: async (platform, accountId) => {
         if (desktop) return desktop.clearLogs(platform, accountId)
@@ -291,30 +380,27 @@ export const useCommerce = create<CommerceState>()(
           tasks: Object.fromEntries(
             Object.entries(s.tasks).map(([id, task]) => [
               id,
-              (accountId === 'all' || id === accountId) &&
+              (accountId === 'all' || task.accountId === accountId) &&
               (platform === 'all' ||
-                s.accounts.find((a) => a.id === id)?.platform === platform)
+                s.accounts.find((a) => a.id === task.accountId)?.platform === platform)
                 ? { ...task, logs: [] }
                 : task,
             ])
           ),
         }))
       },
-      clearTalents: async (platform, ids) => {
-        if (desktop) return desktop.clearTalents(platform, ids)
+      clearTalents: async (platform, accountId, ids) => {
+        if (desktop) return desktop.clearTalents(platform, accountId, ids)
         const state = get()
-        if (
-          state.accounts.some(
-            (a) =>
-              a.platform === platform && state.tasks[a.id]?.status === 'running'
-          )
-        )
-          throw Error('请先停止此平台的采集或邀约任务')
+        if (Object.values(state.tasks).some((task) =>
+          task.accountId === accountId && task.status === 'running'))
+          throw Error('请先停止当前账号的采集或邀约任务')
         const selected = new Set(ids)
         set((s) => ({
           talents: s.talents.filter(
             (talent) =>
               talent.platform !== platform ||
+              talent.sourceAccountId !== accountId ||
               (ids !== undefined && !selected.has(talent.id))
           ),
         }))
@@ -326,7 +412,8 @@ export const useCommerce = create<CommerceState>()(
           state.records.some(
             (r) =>
               ids.includes(r.id) &&
-              state.tasks[r.accountId]?.status === 'running'
+              Object.values(state.tasks).some((task) =>
+                task.accountId === r.accountId && task.status === 'running')
           )
         )
           throw Error('请先停止相关账号的任务')
@@ -357,6 +444,7 @@ export const useCommerce = create<CommerceState>()(
       name: desktop
         ? 'ecommerce-assistant-local-v1'
         : 'ecommerce-assistant-demo-v1',
+      storage: preferenceStorage,
       partialize: (s) => ({
         accounts: s.accounts,
         ...(!desktop
@@ -375,22 +463,42 @@ export const useCommerce = create<CommerceState>()(
   )
 )
 
+// Preview-only simulation below this boundary. Production task state is emitted by
+// desktop-runtime; these timers must never drive real account requests or login claims.
 const timers = new Map<string, ReturnType<typeof setInterval>>()
-export function stopDemo(id: string) {
-  clearInterval(timers.get(id))
-  timers.delete(id)
-  useCommerce.setState((s) => ({
-    tasks: s.tasks[id]
-      ? {
-          ...s.tasks,
-          [id]: {
-            ...s.tasks[id],
-            status: 'stopped',
-            current: '已停止',
-          },
-        }
-      : s.tasks,
-  }))
+export function stopDemo(accountId: string, kind?: Task['kind']) {
+  const keys = kind
+    ? [`${accountId}:${kind}`]
+    : [`${accountId}:collect`, `${accountId}:invite`]
+  for (const key of keys) {
+    clearInterval(timers.get(key))
+    timers.delete(key)
+  }
+  useCommerce.setState((s) => {
+    const tasks = { ...s.tasks }
+    for (const key of keys) {
+      const task = tasks[key]
+      if (task?.status !== 'running') continue
+      tasks[key] = {
+        ...task,
+        status: 'stopped',
+        current: '已停止',
+        ...(task.kind === 'collect'
+          ? {
+              activity: [
+                ...(task.activity || []),
+                {
+                  time: new Date().toISOString(),
+                  level: 'info' as const,
+                  message: `采集已停止，共 ${task.collected} 位达人`,
+                },
+              ].slice(-200),
+            }
+          : {}),
+      }
+    }
+    return { tasks }
+  })
 }
 function demoTask(
   account: Account,
@@ -415,12 +523,20 @@ function demoTask(
   }
 }
 export function collectDemo(account: Account, filters: Filters) {
-  if (timers.has(account.id)) throw Error('该账号已有任务正在运行')
+  const key = `${account.id}:collect`
+  if (timers.has(key)) throw Error('该账号已有采集任务正在运行')
   if (account.status !== 'online') throw Error('请先登录采集账号')
   const list = filterCandidates(account.platform, filters)
-  const task = {
+  const task: Task = {
     ...demoTask(account, 'collect', list.length),
     filters: { ...filters },
+    activity: [
+      {
+        time: new Date().toISOString(),
+        level: 'info',
+        message: '开始采集达人',
+      },
+    ],
   }
   const event: CollectionEvent = {
     id: crypto.randomUUID(),
@@ -430,11 +546,11 @@ export function collectDemo(account: Account, filters: Filters) {
     count: 0,
   }
   useCommerce.setState((s) => ({
-    tasks: { ...s.tasks, [account.id]: task },
+    tasks: { ...s.tasks, [key]: task },
     collections: [...s.collections, event],
   }))
   const timer = setInterval(() => {
-    const current = useCommerce.getState().tasks[account.id]
+    const current = useCommerce.getState().tasks[key]
     const end = Math.min(list.length, current.collected + 20)
     const batch: CollectedTalent[] = list
       .slice(current.collected, end)
@@ -450,11 +566,40 @@ export function collectDemo(account: Account, filters: Filters) {
     const done = end === list.length
     if (done) {
       clearInterval(timer)
-      timers.delete(account.id)
+      timers.delete(key)
     }
     useCommerce.setState((s) => {
-      const pool = new Map(s.talents.map((t) => [t.platform + ':' + t.id, t]))
-      for (const t of batch) pool.set(t.platform + ':' + t.id, t)
+      const pool = new Map(
+        s.talents.map((t) => [
+          `${t.platform}:${t.sourceAccountId}:${t.id}`,
+          t,
+        ])
+      )
+      const time = new Date().toISOString()
+      const activity: TaskLog[] = []
+      let added = 0
+      for (const t of batch) {
+        const key = `${t.platform}:${t.sourceAccountId}:${t.id}`
+        const existing = pool.has(key)
+        if (!existing) added++
+        pool.set(key, t)
+        activity.push({
+          time,
+          level: 'success',
+          message: `${t.name}（${t.id}）· ${existing ? '更新' : '新增'}`,
+        })
+      }
+      activity.push({
+        time,
+        level: 'info',
+        message: `采集第 ${Math.floor(current.collected / 20) + 1} 页 · ${end} 位达人 · 新增 ${added} · 已有 ${batch.length - added}`,
+      })
+      if (done)
+        activity.push({
+          time,
+          level: 'success',
+          message: `采集完成，共 ${end} 位达人`,
+        })
       return {
         talents: [...pool.values()],
         collections: s.collections.map((c) =>
@@ -462,8 +607,9 @@ export function collectDemo(account: Account, filters: Filters) {
         ),
         tasks: {
           ...s.tasks,
-          [account.id]: {
+          [key]: {
             ...current,
+            activity: [...(current.activity || []), ...activity].slice(-200),
             collected: end,
             processed: end,
             status: done ? 'done' : 'running',
@@ -475,15 +621,16 @@ export function collectDemo(account: Account, filters: Filters) {
       }
     })
   }, 450)
-  timers.set(account.id, timer)
+  timers.set(key, timer)
 }
 function logDemoInvite(
   accountId: string,
   message: string,
   response?: DiagnosticResponse
 ) {
+  const key = `${accountId}:invite`
   useCommerce.setState((s) => {
-    const task = s.tasks[accountId]
+    const task = s.tasks[key]
     const entry: DiagnosticLog = {
       id: crypto.randomUUID(),
       time: new Date().toISOString(),
@@ -499,7 +646,7 @@ function logDemoInvite(
       logs: [...s.logs, entry].slice(-1000),
       tasks: {
         ...s.tasks,
-        [accountId]: {
+        [key]: {
           ...task,
           logs: [...(task.logs || []), entry].slice(-200),
         },
@@ -512,37 +659,41 @@ export function startDemo(
   talentIds: string[],
   config: InviteConfig
 ) {
-  if (timers.has(account.id)) throw Error('该账号已有任务正在运行')
+  const key = `${account.id}:invite`
+  if (timers.has(key)) throw Error('该账号已有邀约任务正在运行')
   if (account.status !== 'online') throw Error('请先登录邀约账号')
   const selected = new Set(talentIds)
-  const list = useCommerce
-    .getState()
-    .talents.filter(
-      (t) => t.platform === account.platform && selected.has(t.id)
-    )
+  if (!selected.size) throw Error('请先从采集列表选择达人')
+  const state = useCommerce.getState()
+  const queue = state.talents.filter(
+    (t) =>
+      t.platform === account.platform &&
+      t.sourceAccountId === account.id &&
+      selected.has(t.id)
+  )
+  if (queue.length !== selected.size)
+    throw Error('所选达人不在当前账号的采集列表中')
+  const recordedIds = new Set(state.records
+    .filter((record) => record.accountId === account.id && record.platform === account.platform)
+    .map((record) => record.talentId))
+  const list = queue.filter((candidate) => !recordedIds.has(candidate.id))
     .slice(0, config.maxInvites ?? undefined)
-  if (!list.length) throw Error('请先从采集列表选择达人')
+  if (!list.length) throw Error('没有无邀约记录的达人')
   const task = demoTask(account, 'invite', list.length)
-  useCommerce.setState((s) => ({ tasks: { ...s.tasks, [account.id]: task } }))
-  const timer = setInterval(() => {
+  useCommerce.setState((s) => ({ tasks: { ...s.tasks, [key]: task } }))
+  const advance = () => {
     const state = useCommerce.getState()
-    const current = state.tasks[account.id]
-    if (
-      current.processed >= list.length ||
-      state.accounts.find((a) => a.id === account.id)!.quota === 0
-    ) {
+    const current = state.tasks[key]
+    if (current.processed >= list.length) {
       clearInterval(timer)
-      timers.delete(account.id)
+      timers.delete(key)
       useCommerce.setState((s) => ({
         tasks: {
           ...s.tasks,
-          [account.id]: {
+          [key]: {
             ...current,
             status: 'done',
-            current:
-              current.processed >= list.length
-                ? '本次邀约已完成'
-                : '邀约额度已用完',
+            current: '本次邀约已完成',
           },
         },
       }))
@@ -552,12 +703,8 @@ export function startDemo(
     const duplicate = state.records.some(
       (r) =>
         r.accountId === account.id &&
-        r.talentId === candidate.id &&
-        (r.status === 'review' ||
-          r.status === 'sending' ||
-          (r.status === 'success' &&
-            (account.platform === 'douyin' ||
-              Date.now() - Date.parse(r.resolution || r.time) < 7 * 86400000)))
+        r.platform === account.platform &&
+        r.talentId === candidate.id
     )
     const status = duplicate
       ? 'skipped'
@@ -569,6 +716,7 @@ export function startDemo(
       accountId: account.id,
       platform: account.platform,
       talentId: candidate.id,
+      talentUid: candidate.uid,
       name: candidate.name,
       time: new Date().toISOString(),
       status,
@@ -576,12 +724,13 @@ export function startDemo(
       products: config.products,
       message: config.message,
       note: duplicate
-        ? '近期已邀约或结果待核实'
+        ? '已有邀约记录'
         : status === 'review'
           ? '未收到最终发送结果，请核实平台记录。'
           : '',
     }
     const stopped = status === 'review'
+    const done = current.processed + 1 >= list.length
     if (stopped) {
       record.response = {
         path: '/demo/invite',
@@ -589,24 +738,21 @@ export function startDemo(
         status: 504,
         message: '演示：未收到最终发送结果',
       }
+    }
+    if (stopped || done) {
       clearInterval(timer)
-      timers.delete(account.id)
+      timers.delete(key)
     }
     useCommerce.setState((s) => ({
       records: [record, ...s.records],
-      accounts: s.accounts.map((a) =>
-        a.id === account.id && status === 'success'
-          ? { ...a, quota: a.quota - 1 }
-          : a
-      ),
       tasks: {
         ...s.tasks,
-        [account.id]: {
+        [key]: {
           ...current,
           processed: current.processed + 1,
           [status]: current[status] + 1,
-          status: stopped ? 'stopped' : 'running',
-          current: stopped ? '结果待核实，已停止' : candidate.name,
+          status: stopped ? 'stopped' : done ? 'done' : 'running',
+          current: stopped ? '结果待核实，已停止' : done ? '本次邀约已完成' : candidate.name,
         },
       },
     }))
@@ -616,24 +762,59 @@ export function startDemo(
         `${candidate.name} · ${record.note}`,
         record.response
       )
-  }, config.interval)
-  timers.set(account.id, timer)
+  }
+  const timer = setInterval(advance, config.interval)
+  timers.set(key, timer)
+  advance()
 }
 
-if (desktop) {
-  desktop.onEvent((event) => {
-    if (event.type === 'runtime')
-      useCommerce.setState({ ...event.data, logs: event.data.logs ?? [] })
-    if (event.type === 'account')
-      useCommerce.setState((s) => ({
-        accounts: s.accounts.map((a) =>
-          a.id === event.id ? { ...a, ...event.patch } : a
-        ),
-      }))
-    if (event.type === 'capture')
-      useCommerce.setState((s) => ({
-        captured: { ...s.captured, [event.id]: event.ready },
-      }))
-    if (event.type === 'error') toast.error(event.message)
+function sameQuotaRows(left: Account['quotaRows'], right: Account['quotaRows']) {
+  return left === right || Boolean(left && right && left.length === right.length &&
+    left.every((row, index) => {
+      const other = right[index]
+      return row.label === other.label && row.remaining === other.remaining &&
+        row.total === other.total && row.used === other.used
+    }))
+}
+
+const unsubscribeDesktop = desktop?.onEvent((event) => {
+  if (event.type === 'runtime')
+    useCommerce.setState(event.data)
+  if (event.type === 'task')
+    useCommerce.setState((s) => ({
+      tasks: {
+        ...s.tasks,
+        [`${event.task.accountId}:${event.task.kind}`]: event.task,
+      },
+    }))
+  if (event.type === 'account')
+    useCommerce.setState((s) => {
+      const index = s.accounts.findIndex((a) => a.id === event.id)
+      if (index === -1) return s
+      const account = s.accounts[index]
+      const entries = Object.entries(event.patch) as [
+        keyof Account, Account[keyof Account]
+      ][]
+      // Native observations clone quota rows. Equal values must not rewrite
+      // every account preference or rerender account consumers on page traffic.
+      if (entries.every(([key, value]) => key === 'quotaRows'
+        ? sameQuotaRows(account.quotaRows, event.patch.quotaRows)
+        : account[key] === value)) return s
+      const accounts = [...s.accounts]
+      accounts[index] = { ...account, ...event.patch }
+      return { accounts }
+    })
+  if (event.type === 'capture')
+    useCommerce.setState((s) => s.captured[event.id] === event.ready
+      ? s
+      : { captured: { ...s.captured, [event.id]: event.ready } })
+  if (event.type === 'error') toast.error(event.message)
+})
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    unsubscribeDesktop?.()
+    for (const timer of timers.values()) clearInterval(timer)
+    timers.clear()
   })
 }

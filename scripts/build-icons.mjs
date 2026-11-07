@@ -1,3 +1,12 @@
+/**
+ * AI module map
+ * Purpose: generate platform icon assets from assets/icons/white-master.png.
+ * Entry: run as a Node script only when icon regeneration is explicitly requested.
+ * Flow: use macOS sips to resize PNGs, assemble ICNS/ICO outputs, and copy web/Tauri icons.
+ * Side effects: writes icon assets and invokes native image tools; it is not a read-only
+ * inspection utility. Preserve the source master and existing application icon references.
+ */
+
 import { execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile, cp } from 'node:fs/promises'
 import path from 'node:path'

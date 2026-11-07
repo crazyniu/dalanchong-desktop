@@ -6,6 +6,7 @@
     "core:event:allow-unlisten",
     "allow-toolbar-ready",
     "allow-toolbar-resize",
+    "allow-toolbar-move",
     "allow-toolbar-action"
   ]
 }

@@ -1,3 +1,13 @@
+/**
+ * AI module map
+ * Purpose: collect independent UI helpers used by shared components and feature screens.
+ * Entry: cn combines conditional/Tailwind classes; sleep returns a delay promise;
+ * getPageNumbers creates one-based pagination tokens; getDisplayNameInitials formats names.
+ * Flow: helpers transform inputs without reading commerce stores or native APIs.
+ * Invariants: ellipsis tokens are display-only, not page numbers; name fallbacks are not
+ * account identity. Keep helpers generic and preserve call-site value conventions.
+ */
+
 import { type ClassValue, clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
 

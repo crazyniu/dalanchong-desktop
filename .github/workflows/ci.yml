@@ -1,3 +1,10 @@
+# AI file map
+# Purpose: retain the existing pull-request/main-branch validation workflow.
+# Entry: pull_request, main push, or explicit workflow_dispatch triggers configured jobs.
+# Flow: install locked dependencies and run the declared frontend/core/script/native checks.
+# Boundary: CI is not a packaging or publication workflow. Comment maintenance must not
+# change triggers, commands, permissions, or launch this workflow for extra testing.
+
 name: CI
 on:
   pull_request:

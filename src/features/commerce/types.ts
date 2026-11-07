@@ -1,3 +1,22 @@
+/**
+ * AI module map
+ * Purpose: centralize invitation-domain types and Chinese display labels.
+ * Entry: Account, InviteConfig, CollectedTalent, InviteRecord, DiagnosticLog, and Task
+ * are shared by commerce screens, desktop.ts, and runtime persistence.
+ * Invariants: sending/review are meaningful uncertain-result states; null maxInvites
+ * means no user cap, while quota limits remain independent. IDs and platform/account
+ * scope must survive serialization unchanged. This module performs no platform calls.
+ * Task.activity is a bounded session-only collection stream, separate from error logs.
+ * CollectedTalent's optional profile/commerce fields come from the collection response;
+ * missing fields remain absent in older snapshots. Amount strings retain disclosed
+ * ranges in yuan; Kuaishou sales belong to the source shop, while Douyin sales describe
+ * the talent. View metrics are Kuaishou averages and Douyin 30-day totals.
+ * InviteRecord.talentUid retains the actual profile UID independently of talentId,
+ * so history can open Douyin profiles after the collected row has been removed.
+ * Account quota is a dated platform observation; null means it needs an update,
+ * while zero is a confirmed remaining balance. It never controls invitation sends.
+ */
+
 export type Platform = 'kuaishou' | 'douyin'
 export type ResultStatus =
   | 'success'
@@ -14,8 +33,9 @@ export type Account = {
   sessionId: string
   status: 'online' | 'expired' | 'offline'
   savedAt: string
-  quota: number
+  quota: number | null
   limit: number | null
+  quotaObservedAt?: string
   quotaError?: string
   quotaRows?: {
     label: string
@@ -52,6 +72,29 @@ export type CollectedTalent = {
   uid?: string
   name: string
   fans?: number
+  avatarUrl?: string
+  gender?: string
+  region?: string
+  level?: string
+  categories?: string[]
+  contentType?: string
+  salesMode?: string
+  sales7d?: string
+  sales30d?: string
+  settlement30d?: string
+  liveSales30d?: string
+  videoSales30d?: string
+  imageTextSales30d?: string
+  windowSales30d?: string
+  liveCount30d?: number
+  videoCount30d?: number
+  liveViews30d?: number
+  videoViews30d?: number
+  avgLiveSales?: string
+  avgVideoSales?: string
+  cooperationProducts30d?: number
+  cooperationLevel?: string
+  replyRate?: string
   source: string
   sourceAccountId: string
   collectedAt: string
@@ -61,6 +104,7 @@ export type InviteRecord = {
   accountId: string
   platform: Platform
   talentId: string
+  talentUid?: string
   name: string
   time: string
   status: ResultStatus
@@ -100,6 +144,7 @@ export type TaskLog = {
 export type Task = {
   startedAt?: string
   logs?: TaskLog[]
+  activity?: TaskLog[]
   kind?: 'collect' | 'invite'
   accountId: string
   status: 'running' | 'stopped' | 'done'

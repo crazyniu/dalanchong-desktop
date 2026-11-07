@@ -1,3 +1,11 @@
+# AI file map
+# Purpose: constrain the existing formatter's file scope through ignore/reinclude patterns.
+# Entry: Prettier consults this file only when formatting is explicitly requested.
+# Flow: the root default is excluded and maintained paths are selectively re-included;
+# Tauri generated artifacts remain excluded.
+# Invariant: do not reorder negated patterns casually or run repository-wide formatting
+# as a side effect of documenting source files.
+
 # Ignore everything
 /*
 
@@ -5,18 +13,14 @@
 !/src
 !index.html
 !package.json
-!tailwind.config.js
 !tsconfig.json
 !tsconfig.node.json
 !vite.config.ts
 !.prettierrc
 !README.md
 !eslint.config.js
-!postcss.config.js
 !.vscode/
 
-# Ignore auto generated routeTree.gen.ts
-/src/routeTree.gen.ts
 !/scripts
 !/tests
 !/PRODUCT.md

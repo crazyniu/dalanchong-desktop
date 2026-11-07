@@ -1,3 +1,10 @@
+# AI file map
+# Purpose: existing manual Windows updater download diagnostic workflow.
+# Entry: workflow_dispatch supplies the installed/current version used by the example.
+# Flow: build frontend/example, download once against Gitee, and upload the result artifact.
+# Boundary: downloads live release bytes but does not install them. Requires an explicit
+# request to investigate downloads; annotating this workflow is not permission to run it.
+
 name: Check Windows update download
 on:
   workflow_dispatch:

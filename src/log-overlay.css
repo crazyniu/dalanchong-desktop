@@ -1,6 +1,19 @@
+/**
+ * AI module map
+ * Purpose: size cards rendered inside the transparent task/log native WebView.
+ * Entry: imported by log-overlay.tsx alongside global styles.
+ * Flow: root child markers distinguish collection-log and invite-progress card widths;
+ * ResizeObserver reports the resulting geometry back to overlay.rs.
+ * Invariant: keep selectors synchronized with the rendered data-testid/data-slot values
+ * and respect the native overlay size limits when changing widths. The collection
+ * terminal reserves 32px for native margins within the 500px height limit; its rows
+ * scroll inside the card instead of expanding the native surface indefinitely.
+ */
+
 #root > [data-testid='collection-log'] {
   width: 440px;
   max-width: none;
+  max-height: 468px;
 }
 
 #root > [data-slot='invite-progress'] {

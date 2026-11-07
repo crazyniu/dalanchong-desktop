@@ -1,6 +1,11 @@
 /**
- * Cookie utility functions using manual document.cookie approach
- * Replaces js-cookie dependency for better consistency
+ * AI module map
+ * Purpose: read/write/remove small UI preference cookies in the local document.
+ * Entry: getCookie, setCookie, and removeCookie are used by theme-provider.tsx.
+ * Flow: operate on document.cookie with a path and expiry; reading outside a document
+ * returns undefined. Callers supply preference names/values and optional max age.
+ * Invariant: these helpers are unrelated to merchant session snapshots in cookies.rs;
+ * never use them to store activation codes, platform credentials, or authoritative state.
  */
 
 const DEFAULT_MAX_AGE = 60 * 60 * 24 * 7 // 7 days

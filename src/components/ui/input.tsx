@@ -1,3 +1,11 @@
+/**
+ * AI module map
+ * Purpose: apply shared styling to native input controls without owning their values.
+ * Entry: Input forwards input props/type, events, and accessibility attributes.
+ * Flow: caller-controlled value/disabled/aria-invalid state determines behavior and classes.
+ * Invariant: do not silently coerce values or insert business validation into this primitive.
+ */
+
 import * as React from 'react'
 import { cn } from '@/lib/utils'
 

@@ -1,4 +1,16 @@
-import { Music2, Video, ChevronLeft, ChevronRight, Search } from 'lucide-react'
+/**
+ * AI module map
+ * Purpose: supply commerce-specific display helpers and controlled input/pagination widgets.
+ * Entry: PlatformIcon, platform/result badges, NameAvatar, Choice, SearchInput and Pagination are
+ * composed by the feature screens over shared Shadcn primitives.
+ * Flow: props supply labels/values/counts; callbacks return user intent to the owning view.
+ * SearchInput clears through onChange and returns focus to its input; callers own filtering.
+ * Invariants: pagination changes display scope only; shared components do not send requests,
+ * persist business data, or infer authentication from visual status badges.
+ */
+
+import { useRef } from 'react'
+import { ChevronLeft, ChevronRight, Search, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -18,27 +30,37 @@ import {
   type ResultStatus,
 } from './types'
 
-export function PlatformBadge({
+// Local SVG markers share the same 24px canvas, corner radius, and 16px glyph box.
+// Content areas use these markers only when a platform distinction is needed.
+const platformIcons = {
+  kuaishou: '/platforms/kuaishou.svg',
+  douyin: '/platforms/douyin.svg',
+}
+
+export function PlatformIcon({
   platform,
-  compact = false,
 }: {
   platform: Platform
-  compact?: boolean
 }) {
-  const Icon = platform === 'kuaishou' ? Video : Music2
   return (
-    <span className='inline-flex shrink-0 items-center gap-2'>
-      <span
-        className={cn(
-          'inline-flex size-6 items-center justify-center rounded-md',
-          platform === 'kuaishou'
-            ? 'bg-orange-100 text-orange-700'
-            : 'bg-zinc-900 text-white'
-        )}
-      >
-        <Icon size={14} />
-      </span>
-      {!compact && <span>{platformNames[platform]}</span>}
+    <img
+      src={platformIcons[platform]}
+      alt={platformNames[platform]}
+      width={24}
+      height={24}
+      className='size-6 shrink-0 object-contain'
+    />
+  )
+}
+
+export function PlatformBadge({
+  platform,
+}: {
+  platform: Platform
+}) {
+  return (
+    <span className='inline-flex shrink-0 items-center' title={platformNames[platform]}>
+      <PlatformIcon platform={platform} />
     </span>
   )
 }
@@ -125,16 +147,34 @@ export function SearchInput({
   placeholder?: string
   className?: string
 }) {
+  const inputRef = useRef<HTMLInputElement>(null)
   return (
     <div className={cn('relative', className)}>
       <Search className='absolute top-2.5 left-3 size-4 text-muted-foreground' />
       <Input
+        ref={inputRef}
         aria-label={placeholder}
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className='bg-white pl-9'
+        className='bg-white pr-9 pl-9'
       />
+      {value !== '' && (
+        <Button
+          type='button'
+          variant='ghost'
+          size='icon'
+          className='absolute top-1/2 right-1 size-7 -translate-y-1/2 text-muted-foreground'
+          aria-label='清除搜索'
+          title='清除搜索'
+          onClick={() => {
+            onChange('')
+            inputRef.current?.focus()
+          }}
+        >
+          <X />
+        </Button>
+      )}
     </div>
   )
 }

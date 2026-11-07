@@ -1,8 +1,20 @@
-import { Fragment, useState } from 'react'
+/**
+ * AI module map
+ * Purpose: browse, expand, export, and explicitly clear persisted error diagnostics.
+ * Entry: TaskLogsDialog receives a fixed account; response-details.tsx owns the shared
+ * sanitized response presentation without importing the commerce runtime.
+ * Flow: query a database page for the fixed account, export its history, and clear
+ * through the account-scoped action. Browser preview retains its local array.
+ * Invariants: the log list shows errors only; invitation details also show successful
+ * responses. Never reconstruct credentials, raw request headers, or missing responses.
+ * Native pages and exports cover the account's complete retained history.
+ */
+
+import { Fragment, useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight, Download, ScrollText } from 'lucide-react'
 import { toast } from 'sonner'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { LoadingState } from '@/components/ui/loading-state'
 import {
   Dialog,
   DialogContent,
@@ -20,100 +32,60 @@ import {
 } from '@/components/ui/table'
 import { ClearDataButton } from './clear-data-button'
 import { desktop } from './desktop'
-import { exportRecords } from './format'
-import { Choice, Pagination } from './shared'
+import { useDataQuery, type LogsPage } from './data-query'
+import { exportRecords, formatLogTime } from './format'
+import { Pagination } from './shared'
 import { useCommerce } from './store'
-import { platformNames, type DiagnosticResponse, type Platform } from './types'
-
-export function ResponseDetails({
-  response,
-}: {
-  response: DiagnosticResponse
-}) {
-  return (
-    <div className='space-y-3 rounded-lg border bg-muted/30 p-3 text-sm'>
-      <div className='flex flex-wrap items-center gap-2'>
-        {response.method && <Badge variant='outline'>{response.method}</Badge>}
-        <code className='min-w-0 break-all'>{response.path}</code>
-        {response.status !== undefined && (
-          <Badge variant='secondary'>HTTP {response.status}</Badge>
-        )}
-        {response.code !== undefined && <span>错误码 {response.code}</span>}
-      </div>
-      {response.message && (
-        <p className='break-words whitespace-pre-wrap'>{response.message}</p>
-      )}
-      {response.requestId && (
-        <p className='break-all text-muted-foreground'>
-          请求 ID：{response.requestId}
-        </p>
-      )}
-      {response.body !== undefined && (
-        <pre className='max-h-52 overflow-auto rounded-md bg-background p-3 font-mono text-xs leading-5 break-all whitespace-pre-wrap'>
-          {typeof response.body === 'string'
-            ? response.body
-            : JSON.stringify(response.body, null, 2)}
-        </pre>
-      )}
-    </div>
-  )
-}
+import { ResponseDetails } from './response-details'
+import type { Platform } from './types'
 
 export function TaskLogsDialog({
   open,
   onOpenChange,
-  initialPlatform = 'all',
+  platform,
+  accountId,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  initialPlatform?: Platform | 'all'
+  platform: Platform
+  accountId: string
 }) {
   const logs = useCommerce((s) => s.logs) ?? []
-  const accounts = useCommerce((s) => s.accounts)
   const clearLogs = useCommerce((s) => s.clearLogs)
-  const [platform, setPlatform] = useState<Platform | 'all'>(initialPlatform)
-  const [accountId, setAccountId] = useState('all')
   const [expanded, setExpanded] = useState<string | null>(null)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [exporting, setExporting] = useState(false)
-  const filtered = logs
+  const filtered = useMemo(() => logs
     .filter(
       (log) =>
         log.level === 'error' &&
-        (platform === 'all' || !log.platform || log.platform === platform) &&
-        (accountId === 'all' || log.accountId === accountId)
+        (!log.platform || log.platform === platform) &&
+        log.accountId === accountId
     )
-    .reverse()
-  const pages = Math.ceil(filtered.length / pageSize)
-  const current = Math.min(page, Math.max(1, pages))
-  const displayed = filtered.slice((current - 1) * pageSize, current * pageSize)
+    .reverse(), [logs, platform, accountId])
+  const request = { kind: 'logs', platform, accountId }
+  const queryResult = useDataQuery<LogsPage>({ ...request, page, pageSize }, open)
+  const total = desktop ? queryResult.data?.total || 0 : filtered.length
+  const pages = Math.ceil(total / pageSize)
+  const current = desktop ? queryResult.data?.page || page : Math.min(page, Math.max(1, pages))
+  const displayed = desktop ? queryResult.data?.rows || [] : filtered.slice((current - 1) * pageSize, current * pageSize)
   async function exportLogs() {
     setExporting(true)
     try {
       if (desktop) {
-        if (await desktop.exportLogs()) toast.success('错误日志已导出')
+        const { saved } = await desktop.exportData(request)
+        if (saved) toast.success('错误日志已导出')
       } else {
-        exportRecords(
+        const saved = await exportRecords(
           filtered.map((log) => ({
             时间: log.time,
-            平台: log.platform ? platformNames[log.platform] : '应用',
-            账号:
-              accounts.find((a) => a.id === log.accountId)?.name ||
-              log.accountId ||
-              '',
-            类型:
-              log.kind === 'collect'
-                ? '采集'
-                : log.kind === 'invite'
-                  ? '邀约'
-                  : '应用',
             内容: log.message,
             接口详情: log.response ? JSON.stringify(log.response) : '',
           })),
           '错误日志.csv'
         )
-        toast.success('错误日志已导出')
+        if (saved) toast.success('错误日志已导出')
       }
     } catch (e) {
       toast.error((e as Error).message)
@@ -131,40 +103,10 @@ export function TaskLogsDialog({
           </DialogDescription>
         </DialogHeader>
         <div className='flex flex-wrap items-center gap-3'>
-          <Choice
-            label='日志平台'
-            value={platform}
-            onChange={(value) => {
-              setPlatform(value as Platform | 'all')
-              setAccountId('all')
-              setPage(1)
-            }}
-            options={[
-              { value: 'all', label: '全部平台' },
-              ...Object.entries(platformNames).map(([value, label]) => ({
-                value,
-                label,
-              })),
-            ]}
-          />
-          <Choice
-            label='日志账号'
-            value={accountId}
-            onChange={(value) => {
-              setAccountId(value)
-              setPage(1)
-            }}
-            options={[
-              { value: 'all', label: '全部账号' },
-              ...accounts
-                .filter((a) => platform === 'all' || a.platform === platform)
-                .map((a) => ({ value: a.id, label: a.name })),
-            ]}
-          />
           <Button
             variant='outline'
             className='ml-auto'
-            disabled={exporting || (!desktop && !filtered.length)}
+            disabled={exporting || !total || queryResult.loading}
             onClick={exportLogs}
           >
             <Download />
@@ -172,22 +114,23 @@ export function TaskLogsDialog({
           </Button>
           <ClearDataButton
             label='清空日志'
-            description='清空当前平台与账号范围的全部日志，无法恢复。'
-            disabled={!desktop && !filtered.length}
+            description='清空当前账号的全部错误日志，无法恢复。'
+            disabled={!total || queryResult.loading}
             onClear={async () => {
-              await clearLogs(platform, accountId)
+              if (desktop) await desktop.deleteData(request)
+              else await clearLogs(platform, accountId)
               setExpanded(null)
               setPage(1)
             }}
           />
         </div>
         <div className='min-h-0 flex-1 overflow-y-auto rounded-lg border'>
-          <Table>
+          {queryResult.loading ? <LoadingState label='正在加载日志' /> : queryResult.error ? (
+            <div role='alert' className='grid min-h-40 place-items-center p-6 text-sm text-destructive'>{queryResult.error}</div>
+          ) : <Table>
             <TableHeader>
               <TableRow>
                 <TableHead className='w-40'>时间</TableHead>
-                <TableHead className='w-40'>账号</TableHead>
-                <TableHead className='w-20'>类型</TableHead>
                 <TableHead>内容</TableHead>
                 <TableHead className='w-12' />
               </TableRow>
@@ -197,33 +140,7 @@ export function TaskLogsDialog({
                 <Fragment key={log.id}>
                   <TableRow className='align-top'>
                     <TableCell className='whitespace-nowrap text-muted-foreground tabular-nums'>
-                      {new Date(log.time).toLocaleString('zh-CN', {
-                        month: '2-digit',
-                        day: '2-digit',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        second: '2-digit',
-                        hour12: false,
-                      })}
-                    </TableCell>
-                    <TableCell>
-                      <div className='max-w-40 break-words'>
-                        {accounts.find((a) => a.id === log.accountId)?.name ||
-                          log.accountId ||
-                          '应用'}
-                      </div>
-                      {log.platform && (
-                        <div className='mt-1 text-muted-foreground'>
-                          {platformNames[log.platform]}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {log.kind === 'collect'
-                        ? '采集'
-                        : log.kind === 'invite'
-                          ? '邀约'
-                          : '应用'}
+                      {formatLogTime(log.time)}
                     </TableCell>
                     <TableCell className='max-w-lg min-w-0 break-all whitespace-pre-wrap'>
                       {log.message}
@@ -251,7 +168,7 @@ export function TaskLogsDialog({
                   </TableRow>
                   {expanded === log.id && log.response && (
                     <TableRow>
-                      <TableCell colSpan={5}>
+                      <TableCell colSpan={3}>
                         <ResponseDetails response={log.response} />
                       </TableCell>
                     </TableRow>
@@ -259,8 +176,8 @@ export function TaskLogsDialog({
                 </Fragment>
               ))}
             </TableBody>
-          </Table>
-          {!filtered.length && (
+          </Table>}
+          {!queryResult.loading && !queryResult.error && !total && (
             <div className='grid justify-items-center gap-3 py-20 text-muted-foreground'>
               <ScrollText className='size-8' />
               <span>暂无错误</span>
@@ -270,7 +187,7 @@ export function TaskLogsDialog({
         <Pagination
           page={current}
           pages={pages}
-          total={filtered.length}
+          total={total}
           pageSize={pageSize}
           onChange={setPage}
           onPageSizeChange={(size) => {

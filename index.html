@@ -1,2 +1,9 @@
 <!doctype html>
+<!-- AI file map
+Purpose: main WebView HTML entry for the trusted desktop UI and browser preview.
+Entry: Vite bundles this page; Rust lib.rs opens it as the main window.
+Flow: the root element is mounted by src/main.tsx, which supplies routing/licensing/theme.
+Invariant: preserve root/module-script paths and Chinese product metadata; comments
+must not become visible UI copy or alter application startup.
+-->
 <html lang="zh-CN"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="theme-color" content="#ffffff" /><title>大懒虫</title><link rel="icon" href="/favicon.png" /></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>

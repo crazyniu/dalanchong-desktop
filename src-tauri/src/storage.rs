@@ -1,13 +1,27 @@
+//! AI module map
+//! Purpose: expose trusted-main commands for SQLite history, logs, queries and exports.
+//! Entry: runtime_load/save, database_query/delete/export, and diagnostic_* are
+//! registered by lib.rs and build.rs; account and append_error serve native modules.
+//! Flow: database.rs owns schema, import and row semantics. Storage's operation lock
+//! owns one lazy connection, preserving prepared statements and avoiding repeated WAL
+//! setup/close for each operation. Its owned guard travels to blocking workers; FULL
+//! synchronous transactions retain the durable sending boundary. Shutdown/update still
+//! wait on this same lock. Exports stream a separate read transaction without the lock.
+//! Invariants: reads, deletion and export require main origin and native authorization;
+//! saving results and logging remain available after expiry. Source account data is not
+//! cleared by initialization. write_json serves separate license, cookie and browser data.
+
 use serde_json::{json, Value};
-use std::{io::Write, path::Path};
-use tauri::{AppHandle, Manager, Webview};
+use std::{collections::HashSet, io::{BufWriter, Write}, path::Path, sync::Arc};
+use tauri::{AppHandle, Emitter, Manager, Webview};
 use tauri_plugin_dialog::DialogExt;
 use tokio::sync::Mutex;
+use crate::database;
 
 #[derive(Default)]
-pub struct Storage(pub Mutex<()>);
+pub struct Storage(pub Arc<Mutex<Option<rusqlite::Connection>>>);
 
-pub fn write_json(path: &Path, value: &Value) -> Result<(), Box<dyn std::error::Error>> {
+pub fn write_json<T: serde::Serialize + ?Sized>(path: &Path, value: &T) -> Result<(), Box<dyn std::error::Error>> {
     let temp = path.with_extension("tmp");
     let mut options = std::fs::OpenOptions::new();
     options.create(true).truncate(true).write(true);
@@ -16,141 +30,142 @@ pub fn write_json(path: &Path, value: &Value) -> Result<(), Box<dyn std::error::
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options.open(&temp)?;
+    let mut file = BufWriter::new(options.open(&temp)?);
     serde_json::to_writer(&mut file, value)?;
-    file.sync_all()?;
+    file.flush()?;
+    file.get_ref().sync_all()?;
     std::fs::rename(temp, path)?;
     Ok(())
 }
 
-fn read_logs(directory: &Path) -> Result<Vec<Value>, String> {
-    let file = directory.join("errors.ndjson");
-    if !file.exists() {
-        return Ok(vec![]);
-    }
-    let content = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
-    let mut logs = content
-        .lines()
-        .filter(|s| !s.is_empty())
-        .map(serde_json::from_str::<Value>)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-    logs.retain(|entry| entry["level"] == "error");
-    Ok(logs)
+async fn with_database<T: Send + 'static>(
+    app: &AppHandle,
+    operation: impl FnOnce(&mut rusqlite::Connection) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let mut connection = app.state::<Storage>().0.clone().lock_owned().await;
+    let directory = crate::data_dir(app);
+    tauri::async_runtime::spawn_blocking(move || {
+        if connection.is_none() {
+            *connection = Some(database::open(&directory)?);
+        }
+        operation(connection.as_mut().unwrap())
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn runtime_load(app: AppHandle, webview: Webview) -> Result<Value, String> {
     crate::require_main(&webview)?;
-    crate::license::require_valid(&app).await?;
-    let storage = app.state::<Storage>();
-    let _lock = storage.0.lock().await;
-    let directory = crate::data_dir(&app);
-    let file = directory.join("runtime.json");
-    let mut data = if file.exists() {
-        serde_json::from_slice(&std::fs::read(file).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?
-    } else {
-        json!({"records":[],"talents":[],"tasks":{},"collections":[]})
-    };
-    let logs = read_logs(&directory)?;
-    data["logs"] = json!(&logs[logs.len().saturating_sub(1000)..]);
-    Ok(data)
+    crate::license::require_valid(&app)?;
+    with_database(&app, database::load).await
 }
 
 #[tauri::command]
-pub async fn runtime_save(app: AppHandle, webview: Webview, mut data: Value) -> Result<(), String> {
+pub async fn runtime_save(app: AppHandle, webview: Webview, data: Value) -> Result<Value, String> {
     crate::require_main(&webview)?;
-    let storage = app.state::<Storage>();
-    let _lock = storage.0.lock().await;
-    data.as_object_mut()
-        .ok_or("运行记录格式无效")?
-        .remove("logs");
-    write_json(&crate::data_dir(&app).join("runtime.json"), &data).map_err(|e| e.to_string())
+    // Saving remains available during expiry/shutdown; no platform operation occurs here.
+    with_database(&app, move |db| database::save(db, &data)).await
 }
 
 #[tauri::command]
-pub async fn diagnostic_append(
-    app: AppHandle,
-    webview: Webview,
-    entry: Value,
-) -> Result<(), String> {
+pub async fn database_query(app: AppHandle, webview: Webview, request: Value) -> Result<Value, String> {
     crate::require_main(&webview)?;
-    if entry["level"] != "error" {
-        return Ok(());
-    }
-    let storage = app.state::<Storage>();
-    let _lock = storage.0.lock().await;
-    let mut options = std::fs::OpenOptions::new();
-    options.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(crate::data_dir(&app).join("errors.ndjson"))
-        .map_err(|e| e.to_string())?;
-    writeln!(file, "{}", entry).map_err(|e| e.to_string())
+    crate::license::require_valid(&app)?;
+    with_database(&app, move |db| database::query(db, &request)).await
 }
 
 #[tauri::command]
-pub async fn diagnostic_clear(
-    app: AppHandle,
-    webview: Webview,
-    platform: Option<String>,
-    account_id: Option<String>,
-    before: String,
-) -> Result<(), String> {
+pub async fn database_delete(app: AppHandle, webview: Webview, request: Value) -> Result<Value, String> {
     crate::require_main(&webview)?;
-    crate::license::require_valid(&app).await?;
-    let storage = app.state::<Storage>();
-    let _lock = storage.0.lock().await;
-    let directory = crate::data_dir(&app);
-    let logs = read_logs(&directory)?;
-    let mut options = std::fs::OpenOptions::new();
-    options.create(true).truncate(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(directory.join("errors.ndjson"))
-        .map_err(|e| e.to_string())?;
-    for log in logs {
-        let matches = log["time"].as_str().unwrap_or("") <= before.as_str()
-            && platform
-                .as_deref()
-                .map(|p| log["platform"].is_null() || log["platform"] == p)
-                .unwrap_or(true)
-            && account_id
-                .as_deref()
-                .map(|id| log["accountId"] == id)
-                .unwrap_or(true);
-        if !matches {
-            writeln!(file, "{log}").map_err(|e| e.to_string())?;
+    crate::license::require_valid(&app)?;
+    let handle = app.clone();
+    with_database(&app, move |db| {
+        // Keep new task registration outside the deletion transaction.
+        let tasks = handle.state::<crate::Tasks>();
+        let running = tasks.0.lock().unwrap();
+        let running_ids = running.keys().cloned().collect();
+        database::delete(db, &request, &running_ids)
+    }).await
+}
+
+async fn append_entry(app: &AppHandle, entry: Value) -> Result<(), String> {
+    with_database(app, move |db| database::append_log(db, &entry)).await
+}
+
+#[tauri::command]
+pub async fn diagnostic_append(app: AppHandle, webview: Webview, entry: Value) -> Result<(), String> {
+    crate::require_main(&webview)?;
+    if entry["level"] == "error" { append_entry(&app, entry).await?; }
+    Ok(())
+}
+
+pub fn append_error(app: &AppHandle, entry: Value) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        match append_entry(&app, entry).await {
+            Ok(()) => { let _ = app.emit("assistant:event", json!({"type":"database"})); }
+            Err(error) => { let _ = app.emit("assistant:event", json!({"type":"error","message":format!("错误日志保存失败：{error}")})); }
         }
-    }
-    file.sync_all().map_err(|e| e.to_string())
+    });
+}
+
+pub async fn account(app: &AppHandle, id: String) -> Result<Value, String> {
+    with_database(app, move |db| database::account(db, &id)).await
 }
 
 #[tauri::command]
-pub async fn diagnostic_export(app: AppHandle, webview: Webview) -> Result<bool, String> {
+pub async fn diagnostic_clear(app: AppHandle, webview: Webview, platform: Option<String>, account_id: Option<String>, before: String) -> Result<(), String> {
     crate::require_main(&webview)?;
-    let destination = app
-        .dialog()
-        .file()
-        .set_title("导出错误日志")
-        .set_file_name("大懒虫-错误日志.ndjson")
-        .add_filter("错误日志", &["ndjson"])
-        .blocking_save_file();
-    let Some(destination) = destination else {
-        return Ok(false);
+    crate::license::require_valid(&app)?;
+    with_database(&app, move |db| {
+        database::delete(db, &json!({"kind":"logs","platform":platform,"accountId":account_id,"before":before}), &HashSet::new())?;
+        Ok(())
+    }).await
+}
+
+#[tauri::command]
+pub async fn export_csv(app: AppHandle, webview: Webview, filename: String, content: String) -> Result<bool, String> {
+    crate::require_main(&webview)?;
+    crate::license::require_valid(&app)?;
+    let window = webview.window();
+    tauri::async_runtime::spawn_blocking(move || {
+        let destination = app.dialog().file().set_parent(&window).set_title("导出 CSV")
+            .set_file_name(filename).add_filter("CSV 文件", &["csv"]).blocking_save_file();
+        let Some(destination) = destination else { return Ok(false); };
+        std::fs::write(destination.into_path().map_err(|e| e.to_string())?, content).map_err(|e| e.to_string())?;
+        Ok(true)
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn database_export(app: AppHandle, webview: Webview, request: Value) -> Result<Value, String> {
+    crate::require_main(&webview)?;
+    crate::license::require_valid(&app)?;
+    let (filename,extension,title) = match request["kind"].as_str() {
+        Some("talents") => ("采集达人.csv","csv","导出采集达人"),
+        Some("records") => ("邀约记录.csv","csv","导出邀约记录"),
+        Some("logs") => ("大懒虫-错误日志.ndjson","ndjson","导出错误日志"),
+        _ => return Err("导出类型无效".into()),
     };
-    let logs = read_logs(&crate::data_dir(&app))?;
-    let content = logs.iter().map(|v| format!("{v}\n")).collect::<String>();
-    std::fs::write(destination.into_path().map_err(|e| e.to_string())?, content)
-        .map_err(|e| e.to_string())?;
-    Ok(true)
+    let window = webview.window();
+    tauri::async_runtime::spawn_blocking(move || {
+        let destination = app.dialog().file().set_parent(&window).set_title(title)
+            .set_file_name(filename).add_filter(title, &[extension]).blocking_save_file();
+        let Some(destination) = destination else { return Ok(json!({"saved":false,"count":0})); };
+        crate::license::require_valid(&app)?;
+        // Runtime initialization owns schema creation. A WAL read transaction gives
+        // the export a consistent view while collection and invitations keep writing.
+        let mut db = rusqlite::Connection::open_with_flags(crate::data_dir(&app).join("assistant.sqlite3"),rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| e.to_string())?;
+        let transaction = db.transaction().map_err(|e| e.to_string())?;
+        let mut writer = BufWriter::new(std::fs::File::create(destination.into_path().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?);
+        let count = database::export(&transaction, &request, &mut writer)?;
+        writer.flush().map_err(|e| e.to_string())?;
+        transaction.commit().map_err(|e| e.to_string())?;
+        Ok(json!({"saved":true,"count":count}))
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn diagnostic_export(app: AppHandle, webview: Webview, account_id: String) -> Result<bool, String> {
+    let result = database_export(app, webview, json!({"kind":"logs","accountId":account_id})).await?;
+    Ok(result["saved"] == true)
 }

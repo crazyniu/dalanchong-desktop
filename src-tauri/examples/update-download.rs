@@ -1,3 +1,12 @@
+//! AI module map
+//! Purpose: provide the existing CI-only native updater download harness.
+//! Entry: workflow check-windows-download builds this example and supplies isolated data
+//! and a current version; the harness reuses the production update.rs module.
+//! Flow: construct minimal app state, check/download from Gitee, and write the reported result.
+//! Invariants: no installer execution; flush_sessions intentionally rejects installation.
+//! This accesses live update endpoints and is not a harmless local parser. Do not execute
+//! it during ordinary edits or treat download success as full update acceptance.
+
 // CI-only executable: uses the production updater against Gitee, never installs.
 #[allow(dead_code)]
 #[path = "../src/update.rs"]
@@ -13,6 +22,11 @@ fn require_main(view: &tauri::Webview) -> Result<(), String> {
 }
 mod browser {
     pub async fn flush_sessions(_: &tauri::AppHandle) -> Result<(), String> {
+        Err("下载验证不执行安装".into())
+    }
+}
+mod chrome {
+    pub async fn close_all(_: &tauri::AppHandle) -> Result<(), String> {
         Err("下载验证不执行安装".into())
     }
 }

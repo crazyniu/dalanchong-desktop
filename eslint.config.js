@@ -1,6 +1,15 @@
+/**
+ * AI module map
+ * Purpose: define existing static lint rules for TypeScript/React source.
+ * Entry: ESLint consumes the flat config when explicitly invoked or by configured CI.
+ * Flow: combine language/hook rules, type-only import requirements, unused-symbol
+ * handling, and exclusions for generated/build/shared-component paths.
+ * Invariant: this config does not run lint by itself. Preserve project exclusions and do
+ * not weaken rules or execute checks as part of comment-only maintenance.
+ */
+
 import globals from 'globals'
 import js from '@eslint/js'
-import pluginQuery from '@tanstack/eslint-plugin-query'
 import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig } from 'eslint/config'
@@ -12,6 +21,7 @@ export default defineConfig(
       'dist',
       'dist-release',
       '.work',
+      'browser-extension/vendor',
       'src/components/ui',
       'src-tauri/target',
       'src-tauri/gen',
@@ -21,7 +31,6 @@ export default defineConfig(
     extends: [
       js.configs.recommended,
       ...tseslint.configs.recommended,
-      ...pluginQuery.configs['flat/recommended'],
     ],
     files: ['**/*.{ts,tsx}'],
     languageOptions: {

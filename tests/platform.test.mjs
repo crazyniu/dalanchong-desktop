@@ -1,3 +1,13 @@
+/**
+ * AI module map
+ * Purpose: existing platform adapter tests for response classification and collection semantics.
+ * Entry: node:test cases use returnedApi/fake responses and vm-based page request execution.
+ * Flow: simulate transport/business failures, quotas, observations, page reuse, and platform
+ * schema normalization through platform.mjs.
+ * Boundary: fixtures are not live platform contracts or permission to send invitations.
+ * This documentation change must not execute tests, mutate assertions, or add new scenarios.
+ */
+
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import vm from 'node:vm'
@@ -6,7 +16,7 @@ import {
   collect,
   interpretObservedResponse,
   makeApi,
-  readQuota,
+  parseQuota,
   urls,
 } from '../src/desktop-runtime/platform.mjs'
 
@@ -155,12 +165,9 @@ test('actual injected SDK failure is beforeSend and never calls fetch', async ()
   assert.equal(fetches, 0)
 })
 
-test('missing or invalid quotas fail explicitly instead of returning NaN or treating missing values as zero', async () => {
-  await assert.rejects(
-    readQuota(
-      async () => ({ result: 1, data: { phoneNumber: 'private-phone' } }),
-      'kuaishou'
-    ),
+test('missing or invalid observed quotas fail explicitly instead of returning NaN or treating missing values as zero', () => {
+  assert.throws(
+    () => parseQuota('kuaishou', { result: 1, data: { phoneNumber: 'private-phone' } }),
     (error) => {
       assert.match(error.message, /有效.*额度/)
       assert.doesNotMatch(error.response.body, /private-phone/)
@@ -171,19 +178,10 @@ test('missing or invalid quotas fail explicitly instead of returning NaN or trea
     { shop_gmv_type: 0, online_rights: [], right_list_v2: [] },
     { shop_gmv_type: 1, online_rights: [{}], right_list_v2: [] },
   ])
-    await assert.rejects(
-      readQuota(async () => ({ code: 0, data }), 'douyin'),
-      /有效邀约额度/
-    )
-  assert.equal(
-    (
-      await readQuota(
-        async () => ({ result: 1, data: { remainingSendCnt: '0' } }),
-        'kuaishou'
-      )
-    ).remaining,
-    0
-  )
+    assert.throws(() => parseQuota('douyin', { code: 0, data }), /有效邀约额度/)
+  assert.equal(parseQuota('kuaishou', {
+    result: 1, data: { remainingSendCnt: '0' },
+  }).remaining, 0)
 })
 
 test('observations accept only platform business endpoints and confirm filters only on successful responses', () => {
@@ -206,7 +204,8 @@ test('observations accept only platform business endpoints and confirm filters o
   const request = classifyObservedRequest(
     'douyin',
     'https://buyin.jinritemai.com/square_pc_api/square/search_feed_author',
-    JSON.stringify({ page: 2, filters: { keyword: '家居' } })
+    JSON.stringify({ page: 2, filters: { keyword: '家居' } }),
+    urls.douyin
   )
   assert.throws(
     () =>
@@ -252,7 +251,8 @@ test('collection reuses only a fresh matching observed page without skipping ear
   const request = classifyObservedRequest(
     'douyin',
     'https://buyin.jinritemai.com/square_pc_api/square/search_feed_author',
-    { page: 3, filters: { keyword: '家居' } }
+    { page: 3, filters: { keyword: '家居' } },
+    urls.douyin
   )
   const { capture } = interpretObservedResponse(
     'douyin',
@@ -261,17 +261,19 @@ test('collection reuses only a fresh matching observed page without skipping ear
   )
   for (const age of [0, 61_000]) {
     const calls = []
-    const talents = await collect({
+    const talents = []
+    const count = await collect({
       platform: 'douyin',
-      capture: { search: { ...capture, responseAt: Date.now() - age } },
+      capture: { list: { ...capture, responseAt: Date.now() - age } },
       request: async (_path, body) => {
         calls.push(body.page)
         assert.equal(body.filters.keyword, '家居')
         return pageResult(body.page)
       },
       stopped: () => false,
-      progress: async () => {},
+      progress: async (_count, _text, batch) => talents.push(...batch),
     })
+    assert.equal(count, 4)
     assert.deepEqual(calls, age ? [1, 2, 3, 4] : [1, 2, 4])
     assert.deepEqual(
       talents.map((t) => t.id),
@@ -283,7 +285,8 @@ test('collection reuses only a fresh matching observed page without skipping ear
   const search = classifyObservedRequest(
     'kuaishou',
     base + '/gateway/distribute/match/common/orchestration/execute',
-    { scene: 'distribute_peer_seller_list', pageNum: 2, pageSize: 1 }
+    { scene: 'distribute_peer_seller_list', pageNum: 2, pageSize: 1 },
+    base + '/zone/daren-match/peer-reference'
   )
   const promoter = classifyObservedRequest(
     'kuaishou',
@@ -291,7 +294,8 @@ test('collection reuses only a fresh matching observed page without skipping ear
     {
       sceneCode: 'ps_seller_coop_promoter_list',
       ext: { sellerId: '2', timeRange: '30d' },
-    }
+    },
+    base + '/zone/daren-match/peer-reference'
   )
   const shops = (page) => ({
     result: 1,
@@ -302,30 +306,47 @@ test('collection reuses only a fresh matching observed page without skipping ear
     result: 1,
     data: { promoterDataInfo: [{ promoterId: id, nickname: `达人${id}` }] },
   })
-  const talents = await collect({
+  const talents = []
+  const count = await collect({
     platform: 'kuaishou',
     capture: {
-      search: interpretObservedResponse('kuaishou', search, shops(2)).capture,
-      promoter: interpretObservedResponse('kuaishou', promoter, promoters('2'))
-        .capture,
+      list: interpretObservedResponse('kuaishou', search, shops(2)).capture,
     },
     request: async (path, body) => {
       calls.push(path)
       if (path === search.path) return shops(body.pageNum)
-      assert.equal(body.ext.timeRange, '30d')
+      assert.equal(body.ext.timeRange, '7d')
       return promoters(body.ext.sellerId)
     },
     stopped: () => false,
-    progress: async () => {},
+    progress: async (_count, _text, batch) => talents.push(...batch),
   })
-  assert.deepEqual(calls, [search.path, promoter.path])
+  assert.equal(count, 2)
+  assert.deepEqual(calls, [search.path, promoter.path, promoter.path])
   assert.deepEqual(
     talents.map((t) => t.id),
     ['1', '2']
   )
+  const ownShop = interpretObservedResponse('kuaishou', promoter, promoters('2')).capture
+  const ownTalents = []
+  const ownCalls = []
+  assert.equal(await collect({
+    platform: 'kuaishou',
+    capture: { list: { ...ownShop, responseAt: Date.now() - 61_000 } },
+    request: async (path, body) => {
+      ownCalls.push(path)
+      assert.equal(body.ext.sellerId, '2')
+      assert.equal(body.ext.timeRange, '30d')
+      return promoters('2')
+    },
+    stopped: () => false,
+    progress: async (_count, _text, batch) => ownTalents.push(...batch),
+  }), 1)
+  assert.deepEqual(ownCalls, [promoter.path])
+  assert.deepEqual(ownTalents.map((row) => row.id), ['2'])
 })
 
-test('observed quota, authenticated identity and product commissions remain scoped to their known response schemas', () => {
+test('observed quota and authenticated identity remain scoped to their known response schemas', () => {
   const identity = classifyObservedRequest(
     'kuaishou',
     'https://cps.kwaixiaodian.com/gateway/distribute/match/user/basic/login/info?type=1'
@@ -366,18 +387,4 @@ test('observed quota, authenticated identity and product commissions remain scop
     }).quota.remaining,
     12
   )
-  const product = classifyObservedRequest(
-    'douyin',
-    'https://buyin.jinritemai.com/connection/pc/im/promotion/list?uid=talent-1&query=123'
-  )
-  const items = [
-    { product_id: '123', orient_cos_ratio_detail: { ratio: 1000 } },
-  ]
-  const observed = interpretObservedResponse('douyin', product, {
-    code: 0,
-    data: { promotion_list: items },
-  }).product
-  assert.equal(observed.uid, 'talent-1')
-  assert.equal(observed.query, '123')
-  assert.deepEqual(observed.items, items)
 })

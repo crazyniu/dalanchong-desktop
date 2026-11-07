@@ -1,3 +1,10 @@
+# AI file map
+# Purpose: existing manual check of configured Gitee publication access.
+# Entry: workflow_dispatch runs publish-release.mjs --verify-access with the secret token.
+# Flow: install dependencies and inspect access through the release helper.
+# Boundary: this contacts an external service; ordinary code/comment work must not invoke
+# it, print secrets, or treat it as proof that artifacts were published or installed.
+
 name: Validate Gitee access
 on:
   workflow_dispatch:

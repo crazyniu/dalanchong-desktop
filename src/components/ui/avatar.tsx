@@ -1,3 +1,11 @@
+/**
+ * AI module map
+ * Purpose: share Radix avatar root/image/fallback styling across identity displays.
+ * Entry: Avatar, AvatarImage, and AvatarFallback preserve the underlying primitive props.
+ * Flow: callers supply image/name content; Radix handles image availability and fallback.
+ * Invariant: avatar imagery is presentation only and cannot establish platform identity.
+ */
+
 import * as React from 'react'
 import * as AvatarPrimitive from '@radix-ui/react-avatar'
 import { cn } from '@/lib/utils'

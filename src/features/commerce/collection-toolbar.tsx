@@ -1,65 +1,109 @@
+/**
+ * AI module map
+ * Purpose: present the invitation workspace's bottom floating controls.
+ * Entry: CollectionToolbar consumes ToolbarState and emits the ToolbarAction union.
+ * Flow: labels/disabled states reflect parent snapshots; clicks request view, platform home/history,
+ * collection, collection stop, logs, or records actions through the owner. The grip owns
+ * pointer capture and reports screen-coordinate deltas; the parent owns positioning.
+ * Invariant: this reusable view never invokes native business commands itself; it is
+ * rendered both in the main preview and in toolbar-overlay.tsx's separate WebView.
+ */
+
+import { useRef, useState, type PointerEvent } from 'react'
 import {
-  ChevronDown,
+  ArrowLeft,
+  ArrowRight,
+  GripVertical,
   History,
+  House,
   Play,
-  RotateCw,
   ScrollText,
   Square,
-  UserRound,
 } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import type { Account } from './types'
 
 export type ToolbarAction =
   | { type: 'view'; view: string }
-  | { type: 'account'; id: string }
   | {
       type:
-        | 'manage'
-        | 'reload'
+        | 'home'
+        | 'back'
+        | 'forward'
         | 'collect'
         | 'stop'
         | 'return'
         | 'logs'
         | 'records'
-        | 'progress'
     }
 
 export type ToolbarState = {
+  kind?: 'invite'
   accountId: string
-  accounts: Pick<Account, 'id' | 'name' | 'status'>[]
   view: string
   count: number
-  progress: string
   collecting: boolean
   inviting: boolean
-  hasInvites: boolean
   pendingInvite: boolean
   returning: boolean
   disabled: boolean
+  navigationDisabled: boolean
   label: string
 }
 
 export function CollectionToolbar({
   state,
   onAction,
+  onMove,
 }: {
   state: ToolbarState
   onAction: (action: ToolbarAction) => void
+  onMove: (deltaX: number, deltaY: number) => void
 }) {
-  const account = state.accounts.find((a) => a.id === state.accountId)
+  const pointer = useRef<{ id: number; x: number; y: number } | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const move = (event: PointerEvent<HTMLButtonElement>) => {
+    const previous = pointer.current
+    if (!previous || previous.id !== event.pointerId) return
+    // Client coordinates move with the native child; screen coordinates stay stable.
+    const deltaX = event.screenX - previous.x
+    const deltaY = event.screenY - previous.y
+    pointer.current = { id: event.pointerId, x: event.screenX, y: event.screenY }
+    if (deltaX || deltaY) onMove(deltaX, deltaY)
+  }
+  const endDrag = () => {
+    pointer.current = null
+    setDragging(false)
+  }
   return (
     <div className='collection-toolbar' data-testid='collection-toolbar'>
+      <Button
+        type='button'
+        variant='ghost'
+        size='icon'
+        className='toolbar-drag-handle size-8 text-muted-foreground'
+        aria-label='拖动工具栏'
+        title='拖动工具栏'
+        data-dragging={dragging}
+        onPointerDown={(event) => {
+          if (event.button !== 0 || !event.isPrimary) return
+          event.preventDefault()
+          event.currentTarget.setPointerCapture(event.pointerId)
+          pointer.current = { id: event.pointerId, x: event.screenX, y: event.screenY }
+          setDragging(true)
+        }}
+        onPointerMove={move}
+        onPointerUp={(event) => {
+          if (pointer.current?.id !== event.pointerId) return
+          move(event)
+          event.currentTarget.releasePointerCapture(event.pointerId)
+          endDrag()
+        }}
+        onPointerCancel={endDrag}
+        onLostPointerCapture={endDrag}
+      >
+        <GripVertical className='size-5' />
+      </Button>
       <Tabs
         value={state.view}
         onValueChange={(view) => onAction({ type: 'view', view })}
@@ -67,121 +111,79 @@ export function CollectionToolbar({
         <TabsList>
           <TabsTrigger value='collect'>采集达人</TabsTrigger>
           <TabsTrigger value='list'>
-            采集列表 <span className='ml-1 tabular-nums'>{state.count}</span>
+            邀约达人 <span className='ml-1 tabular-nums'>{state.count}</span>
           </TabsTrigger>
         </TabsList>
       </Tabs>
       {state.view === 'collect' && (
-        <>
-          {state.hasInvites && !state.collecting ? (
+        <div className='ml-auto flex min-w-0 items-center gap-2'>
+          {state.accountId && (
+            <div className='flex shrink-0 items-center gap-1'>
+              <Button
+                variant='ghost'
+                size='icon'
+                className='size-8'
+                aria-label='后退'
+                title='后退'
+                disabled={state.navigationDisabled}
+                onClick={() => onAction({ type: 'back' })}
+              >
+                <ArrowLeft className='size-4' />
+              </Button>
+              <Button
+                variant='ghost'
+                size='icon'
+                className='size-8'
+                aria-label='前进'
+                title='前进'
+                disabled={state.navigationDisabled}
+                onClick={() => onAction({ type: 'forward' })}
+              >
+                <ArrowRight className='size-4' />
+              </Button>
+              <Button
+                variant='ghost'
+                size='sm'
+                className='shrink-0'
+                aria-label='主页'
+                title='主页'
+                disabled={state.collecting || state.inviting}
+                onClick={() => onAction({ type: 'home' })}
+              >
+                <House className='size-4' />
+                主页
+              </Button>
+            </div>
+          )}
+          {state.pendingInvite ? (
             <Button
-              variant='ghost'
               size='sm'
-              onClick={() => onAction({ type: 'progress' })}
+              disabled={state.returning}
+              onClick={() => onAction({ type: 'return' })}
             >
-              邀约进度
+              {state.returning ? '正在打开' : '返回邀约'}
             </Button>
           ) : (
-            state.progress && (
-              <span
-                className='toolbar-progress truncate text-sm text-muted-foreground tabular-nums'
-                title={state.progress}
-              >
-                {state.progress}
-              </span>
-            )
-          )}
-          <div className='ml-auto flex min-w-0 items-center gap-2'>
-            {account && (
-              <>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant='ghost'
-                      size='sm'
-                      className='toolbar-account min-w-0 gap-2 text-muted-foreground'
-                      aria-label='当前网页账号'
-                    >
-                      <UserRound className='size-4' />
-                      <span className='truncate'>{account.name}</span>
-                      <span
-                        className={`size-1.5 shrink-0 rounded-full ${account.status === 'online' ? 'bg-emerald-600' : 'bg-amber-600'}`}
-                      />
-                      <ChevronDown className='size-3' />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent
-                    align='end'
-                    side='top'
-                    avoidCollisions={false}
-                    className='max-h-72 overflow-y-auto'
-                  >
-                    <DropdownMenuLabel>网页账号</DropdownMenuLabel>
-                    {state.accounts.map((a) => (
-                      <DropdownMenuItem
-                        key={a.id}
-                        onClick={() => onAction({ type: 'account', id: a.id })}
-                      >
-                        <span className='max-w-56 truncate'>{a.name}</span>
-                        {a.id === account.id && (
-                          <Badge variant='secondary' className='ml-auto'>
-                            当前
-                          </Badge>
-                        )}
-                      </DropdownMenuItem>
-                    ))}
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onClick={() => onAction({ type: 'manage' })}
-                    >
-                      管理账号
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                <Button
-                  variant='ghost'
-                  size='icon'
-                  className='size-8 shrink-0'
-                  aria-label='返回达人页面'
-                  title='返回达人页面'
-                  disabled={state.collecting || state.inviting}
-                  onClick={() => onAction({ type: 'reload' })}
-                >
-                  <RotateCw className='size-4' />
-                </Button>
-              </>
-            )}
-            {state.pendingInvite ? (
+            state.accountId && (
               <Button
                 size='sm'
-                disabled={state.returning}
-                onClick={() => onAction({ type: 'return' })}
+                disabled={state.disabled}
+                onClick={() =>
+                  onAction({
+                    type: state.collecting ? 'stop' : 'collect',
+                  })
+                }
               >
-                {state.returning ? '正在打开' : '返回邀约'}
+                {state.collecting ? (
+                  <Square className='size-3 fill-current' />
+                ) : (
+                  <Play className='size-3 fill-current' />
+                )}
+                {state.label}
               </Button>
-            ) : (
-              account && (
-                <Button
-                  size='sm'
-                  disabled={state.disabled}
-                  onClick={() =>
-                    onAction({
-                      type:
-                        state.collecting || state.inviting ? 'stop' : 'collect',
-                    })
-                  }
-                >
-                  {state.collecting || state.inviting ? (
-                    <Square className='size-3 fill-current' />
-                  ) : (
-                    <Play className='size-3 fill-current' />
-                  )}
-                  {state.label}
-                </Button>
-              )
-            )}
-          </div>
-        </>
+            )
+          )}
+        </div>
       )}
       <Button
         variant='ghost'

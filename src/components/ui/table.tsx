@@ -1,3 +1,12 @@
+/**
+ * AI module map
+ * Purpose: compose semantic HTML tables with a shared horizontal-overflow container.
+ * Entry: Table and caption/header/body/footer/row/head/cell helpers forward DOM props.
+ * Flow: feature components supply rows, selection handlers, sorting, and pagination.
+ * Invariant: data-state styling reflects supplied selection but never selects, reorders,
+ * fetches, or deletes records on its own.
+ */
+
 import * as React from 'react'
 import { cn } from '@/lib/utils'
 

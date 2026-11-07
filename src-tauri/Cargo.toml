@@ -1,6 +1,17 @@
+# AI file map
+# Purpose: declare the native package, target-specific dependencies, and release profile.
+# Entry: Cargo/Tauri use this manifest; package.json remains the project version authority.
+# Flow: macOS/Windows hardware APIs and Windows URL opening are target-gated; shared crates implement IPC, network,
+# state, and updates. Cargo.lock records resolved versions.
+# WebView snapshots use target-specific AppKit/WebKit and WebView2 APIs plus in-memory base64.
+# Invariants: keep package versions synchronized; do not embed credentials or reintroduce
+# Node/Electron. chrome_runtime.rs locates installed Google Chrome Stable;
+# chrome.rs launches it with isolated account data for shop workspaces.
+# The existing strip setting documents a host toolchain compatibility issue.
+
 [package]
 name = "dalanchong"
-version = "0.3.1"
+version = "0.3.2"
 description = "大懒虫电商助手"
 edition = "2021"
 
@@ -17,12 +28,30 @@ tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
-tokio = { version = "1", features = ["sync", "time"] }
+tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 semver = "1"
 url = "2"
 time = { version = "0.3", features = ["formatting"] }
+md-5 = "0.10.6"
+tungstenite = { version = "0.28", default-features = false, features = ["handshake"] }
+base64 = "0.22.1"
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+block2 = "0.6.2"
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSView", "NSGraphics", "NSGraphicsContext", "objc2-core-graphics"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSDictionary", "NSError", "NSString"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "WKWebView", "WKSnapshotConfiguration", "block2", "objc2-app-kit"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation", "Win32_System_Threading", "Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage"] }
+webview2-com = "0.39.1"
 
 [profile.release]
 codegen-units = 1

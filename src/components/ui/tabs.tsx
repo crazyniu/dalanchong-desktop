@@ -1,3 +1,11 @@
+/**
+ * AI module map
+ * Purpose: style Radix tab root/list/triggers/content for controlled or local navigation.
+ * Entry: Tabs and related named wrappers retain values, change callbacks, and accessibility.
+ * Flow: Radix selects content; the owning page interprets values and manages task state.
+ * Invariant: switching a view must not implicitly cancel or restart background work.
+ */
+
 import * as React from 'react'
 import * as TabsPrimitive from '@radix-ui/react-tabs'
 import { cn } from '@/lib/utils'

@@ -1,3 +1,11 @@
+/**
+ * AI module map
+ * Purpose: provide reusable compact labels with semantic visual variants.
+ * Entry: Badge and badgeVariants use cva; asChild delegates rendering through Radix Slot.
+ * Flow: caller props determine content/variant, while cn merges local styling.
+ * Invariant: status text is supplied by domain state; badge color never drives business logic.
+ */
+
 import * as React from 'react'
 import { Slot } from '@radix-ui/react-slot'
 import { cva, type VariantProps } from 'class-variance-authority'

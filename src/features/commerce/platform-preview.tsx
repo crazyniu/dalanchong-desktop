@@ -1,3 +1,13 @@
+/**
+ * AI module map
+ * Purpose: provide a browser-only stand-in for the merchant platform page.
+ * Entry: PlatformPreview receives an Account when the native desktop bridge is absent.
+ * Flow: edit a draft filter, apply it through the commerce store, paginate deterministic
+ * sample candidates, and use simulated login for UI exploration.
+ * Invariant: this module must never authenticate a real account or call platform APIs;
+ * production collection uses the actual native website and its observed filters.
+ */
+
 import { useState } from 'react'
 import { Search, Store } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -11,7 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { Choice, NameAvatar, Pagination, PlatformBadge } from './shared'
+import { Choice, NameAvatar, Pagination } from './shared'
 import { defaultFilters, filterCandidates, useCommerce } from './store'
 import type { Account, Filters } from './types'
 
@@ -40,8 +50,7 @@ export function PlatformPreview({ account }: { account: Account }) {
       data-testid='platform-preview'
     >
       <div className='flex h-14 items-center gap-8 border-b px-6'>
-        <strong className='flex items-center gap-2 text-base'>
-          <PlatformBadge compact platform={account.platform} />
+        <strong className='text-base'>
           {account.platform === 'kuaishou' ? '快分销' : '精选联盟'}
         </strong>
         <span className='font-medium'>

@@ -1,3 +1,13 @@
+/**
+ * AI module map
+ * Purpose: existing release-helper tests using temporary version notes and artifact fixtures.
+ * Entry: node:test cases exercise prepare-release helpers and updater URL rewriting.
+ * Flow: fixture() creates/removes a temporary tree; synthetic artifacts model hashes,
+ * signatures, metadata, and target completeness without publishing a release.
+ * Boundary: these tests create files if run and do not prove live update installation.
+ * Comment-only maintenance leaves fixtures/assertions unchanged and does not execute them.
+ */
+
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { mkdtemp, mkdir, rm, truncate, writeFile } from 'node:fs/promises'

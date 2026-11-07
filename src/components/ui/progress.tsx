@@ -1,3 +1,11 @@
+/**
+ * AI module map
+ * Purpose: visualize a caller-provided percentage with Radix Progress.
+ * Entry: Progress passes accessibility props and translates its indicator from value.
+ * Flow: domain task/download counters are computed elsewhere and rendered here.
+ * Invariant: this component does not advance progress itself or declare completion.
+ */
+
 import * as React from "react"
 import { cn } from "cn"
 import { Progress as ProgressPrimitive } from "radix-ui"
@@ -10,6 +18,7 @@ function Progress({
   return (
     <ProgressPrimitive.Root
       data-slot="progress"
+      value={value}
       className={cn(
         "relative h-2 w-full overflow-hidden rounded-full bg-primary/20",
         className

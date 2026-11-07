@@ -1,3 +1,12 @@
+/**
+ * AI file map
+ * Purpose: define strict browser/React type checking for src without emitting JavaScript.
+ * Entry: referenced by tsconfig.json; Vite performs bundling separately.
+ * Flow: DOM libraries, JSX, bundler resolution, and @ aliases describe the frontend.
+ * Invariant: preserve strictness and noEmit; declarations are not runtime authorization.
+ * Existing inline comments are legal because TypeScript reads this file as JSONC.
+ */
+
 {
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",

@@ -1,4 +1,11 @@
 <!doctype html>
+<!-- AI file map
+Purpose: minimal HTML entry for the native floating toolbar WebView.
+Entry: toolbar.rs opens this page; src/toolbar-overlay.tsx mounts invitation/research controls.
+Flow: native events provide state and forwarded actions return to the main UI.
+Invariant: retain the root and module-script path; this is a separate capability scope,
+not a second bootstrap of the full application.
+-->
 <html lang="zh-CN">
   <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>采集工具栏</title></head>
   <body><div id="root"></div><script type="module" src="/src/toolbar-overlay.tsx"></script></body>

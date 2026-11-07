@@ -1,3 +1,12 @@
+/**
+ * AI file map
+ * Purpose: configure editor formatting and Tailwind class detection for this repository.
+ * Entry: VS Code reads this JSONC file for a developer's workspace session.
+ * Flow: the formatter setting and classRegex hints affect authoring, not app execution.
+ * Invariant: editor format-on-save is not an instruction for an AI to run bulk formatting;
+ * preserve actual project source behavior while editing comments.
+ */
+
 {
   "editor.formatOnSave": true,
   "editor.defaultFormatter": "esbenp.prettier-vscode",

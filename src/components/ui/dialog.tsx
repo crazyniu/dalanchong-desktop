@@ -1,3 +1,13 @@
+/**
+ * AI module map
+ * Purpose: provide the application's shared explicit-close modal primitives.
+ * Entry: Dialog/Trigger/Content/Close and title, description, header, footer exports.
+ * Flow: Radix supplies portal, focus management, and controlled open callbacks; this wrapper
+ * adds shared overlay/animation styling and the close button.
+ * Invariant: Content prevents outside interaction and Escape from dismissing the modal.
+ * Keep data-slot names stable: browser.tsx uses covering layers to hide native WebViews.
+ */
+
 'use client'
 
 import * as React from 'react'

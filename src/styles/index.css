@@ -1,3 +1,13 @@
+/**
+ * AI module map
+ * Purpose: load Tailwind/animation/theme layers and define application-wide DOM styling.
+ * Entry: imported by main.tsx and both child-WebView React entry points.
+ * Flow: theme variables feed base element rules, utility classes, collapse animations,
+ * and commerce-specific layout refinements.
+ * Invariants: shared data-slot selectors also connect DOM modals to native visibility;
+ * avoid rules that make transparent child views opaque or globally center page titles.
+ */
+
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import './theme.css';
@@ -57,7 +67,7 @@
   @apply after:pointer-events-none after:absolute after:inset-s-0 after:bottom-0 after:hidden after:h-32 after:w-full after:rounded-b-2xl after:bg-[linear-gradient(180deg,transparent_10%,var(--background)_70%)] md:after:block;
 }
 
-/* styles.css */
+/* Radix supplies measured content height for the open/close collapse animations. */
 .CollapsibleContent {
   overflow: hidden;
 }
@@ -155,6 +165,14 @@ textarea {
   gap: 12px;
   min-width: 0;
 }
+.toolbar-drag-handle {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.toolbar-drag-handle[data-dragging='true'] {
+  cursor: grabbing;
+}
 .floating-toolbar {
   position: absolute;
   left: 50%;
@@ -171,14 +189,6 @@ textarea {
 }
 .toolbar-account {
   max-width: 160px;
-}
-.toolbar-progress {
-  max-width: 160px;
-}
-@container (max-width: 1050px) {
-  .toolbar-progress {
-    display: none;
-  }
 }
 @container (max-width: 900px) {
   .toolbar-secondary-label {

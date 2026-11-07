@@ -1,3 +1,14 @@
+/**
+ * AI module map
+ * Purpose: validate release inputs and assemble metadata without publishing them.
+ * Entry: readRelease, inspectArtifacts, prepareRelease, and CLI argument handling.
+ * Flow: compare package/Cargo/tag versions and Chinese release-note sections, inspect all
+ * required target artifacts and size/hash/signature metadata, then prepare publication data.
+ * Invariants: package.json is the version source; assets must exist and match their
+ * manifests before any latest pointer can be produced. Imported helpers are also used by
+ * publish-release.mjs and existing script tests; do not run checks without user authorization.
+ */
+
 import { createHash } from 'node:crypto'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'

@@ -1,3 +1,19 @@
+/**
+ * AI module map
+ * Purpose: gate the React application on native licensing and display activation status.
+ * Entry: LicenseGate wraps the router; LicenseStatus renders a single-line expiry
+ * entry without a background and opens the expiry/device dialog.
+ * Flow: subscribe to native monitor results, initialize commerce only after
+ * valid authorization, and replace the application with the activation form on failure.
+ * LicenseStatus uses browser.tsx's openBrowserDialog to capture the page background and
+ * finish hiding native views before mounting the dialog; closing restores them afterward.
+ * State: useLicense is a display snapshot; activation busy state is local.
+ * The initial monitor result owns the centered authorization loading state.
+ * Invariants: Rust/server checks remain authoritative. The UI submits only an activation
+ * code, never a device ID or expiry. Device codes are copyable display values; blank
+ * hardware identity disables activation. Loading indicators stay centered.
+ */
+
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { ChevronRight, Copy, LoaderCircle } from 'lucide-react'
 import { toast } from 'sonner'
@@ -12,6 +28,8 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { LoadingState } from '@/components/ui/loading-state'
+import { openBrowserDialog } from './browser'
 import { desktop, type LicenseState } from './desktop'
 import { useCommerce } from './store'
 
@@ -56,7 +74,7 @@ function DeviceCode({
         }
       >
         <code
-          className={`min-w-0 text-sm leading-6 select-all ${inline ? 'whitespace-nowrap' : 'flex-1 break-all'}`}
+          className='min-w-0 flex-1 break-all text-sm leading-6 select-all'
         >
           {value}
         </code>
@@ -101,17 +119,6 @@ function ActivationForm() {
       setBusy(false)
     }
   }
-  async function retry() {
-    setBusy(true)
-    setError('')
-    try {
-      await desktop!.verifyLicense()
-    } catch (e) {
-      setError(errorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
   const message =
     error ||
     (!state?.valid && state?.reason !== 'not_activated' ? state?.message : '')
@@ -144,23 +151,12 @@ function ActivationForm() {
       )}
       <Button
         type='submit'
-        disabled={busy || !code.trim()}
+        disabled={busy || !code.trim() || !state?.deviceId}
         className='h-11 w-full'
       >
         {busy && <LoaderCircle className='size-4 animate-spin' />}
         激活
       </Button>
-      {!state?.valid && state?.hasCode && (
-        <Button
-          type='button'
-          variant='outline'
-          disabled={busy}
-          onClick={retry}
-          className='h-11 w-full'
-        >
-          重新验证
-        </Button>
-      )}
     </form>
   )
 }
@@ -179,7 +175,6 @@ export function LicenseGate({ children }: { children: ReactNode }) {
       .getLicenseState()
       .then((current) => {
         useLicense.setState({ state: current })
-        return desktop!.verifyLicense()
       })
       .catch((e) => setError(errorText(e)))
       .finally(() => setChecking(false))
@@ -204,6 +199,21 @@ export function LicenseGate({ children }: { children: ReactNode }) {
     }
   }, [state?.valid])
   if (!desktop || (state?.valid && ready)) return children
+  if (checking || !state || !state.checked || state.valid) {
+    return (
+      <main className='flex min-h-svh items-center justify-center bg-muted/30 px-6'>
+        {error ? (
+          <p role='alert' className='text-center text-sm text-destructive'>
+            {error}
+          </p>
+        ) : (
+          <LoadingState
+            label={state?.valid ? '正在加载数据…' : '正在验证授权…'}
+          />
+        )}
+      </main>
+    )
+  }
   return (
     <main className='flex min-h-svh items-center justify-center bg-muted/30 px-6'>
       <section className='w-full max-w-md space-y-8 rounded-xl border bg-background p-8'>
@@ -217,17 +227,7 @@ export function LicenseGate({ children }: { children: ReactNode }) {
             {error}
           </p>
         )}
-        {checking || !state || state.valid ? (
-          <p
-            role='status'
-            className='flex items-center gap-2 text-sm text-muted-foreground'
-          >
-            <LoaderCircle className='size-4 animate-spin' />
-            正在验证授权…
-          </p>
-        ) : (
-          <ActivationForm />
-        )}
+        <ActivationForm />
       </section>
     </main>
   )
@@ -262,34 +262,38 @@ export function LicenseStatus() {
         ? '到期时间'
         : '授权期限'
   const colors = expired
-    ? 'bg-red-50 text-red-800 hover:bg-red-100 hover:text-red-900'
+    ? 'text-destructive hover:text-destructive'
     : expiringSoon
-      ? 'bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900'
-      : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 hover:text-emerald-900'
+      ? 'text-amber-700 hover:text-amber-800'
+      : 'text-muted-foreground hover:text-foreground'
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen) {
+          void openBrowserDialog(() => setOpen(true))
+        } else {
+          setOpen(false)
+        }
+      }}
+    >
       <DialogTrigger asChild>
         <Button
           variant='ghost'
           size='sm'
           aria-label={`激活信息，到期时间：${expiryLabel}`}
           title={`到期时间：${expiryLabel}`}
-          className={`h-auto w-full justify-between gap-3 rounded-xl px-3 py-3 text-left ${colors}`}
+          className={`h-9 w-full justify-between gap-1 bg-transparent px-1 text-left text-sm font-normal hover:bg-transparent has-[>svg]:px-1 dark:hover:bg-transparent ${colors}`}
         >
-          <span className='flex min-w-0 flex-col gap-1'>
-            <span className='flex items-center gap-1.5 text-sm font-normal'>
-              <span className='size-1.5 shrink-0 rounded-full bg-current' />
-              {statusLabel}
-            </span>
-            <span className='text-base font-semibold tabular-nums'>
-              {state.expiresAt ? (
-                <time dateTime={state.expiresAt}>{expiryDate}</time>
-              ) : (
-                '永久有效'
-              )}
-            </span>
+          <span>{statusLabel}</span>
+          <span className='tabular-nums'>
+            {state.expiresAt ? (
+              <time dateTime={state.expiresAt}>{expiryDate}</time>
+            ) : (
+              '永久有效'
+            )}
           </span>
-          <ChevronRight className='size-4 shrink-0' />
+          <ChevronRight className='size-3.5 shrink-0' />
         </Button>
       </DialogTrigger>
       <DialogContent

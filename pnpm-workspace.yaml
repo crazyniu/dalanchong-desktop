@@ -1,3 +1,8 @@
+# AI file map
+# Purpose: record pnpm's explicit dependency build-script permissions for this workspace.
+# Entry: pnpm reads allowBuilds while installing dependencies.
+# Invariant: changes affect package installation behavior; keep the actual allow/deny
+# choices deliberate and do not treat this file as application runtime configuration.
+
 allowBuilds:
   esbuild: true
-  '@clerk/shared': false

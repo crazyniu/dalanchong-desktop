@@ -8,10 +8,12 @@
 - `icon-*.png`：各尺寸 PNG；`app.iconset/`：ICNS 输入文件。
 - `tauri/256x256.png`：Tauri 使用的 256 × 256 RGBA 图标。
 
-在 macOS 执行 `pnpm icons:build`，使用系统 `sips` 和 `iconutil` 导出，再同步到桌面端 `public/brand.png` 与 `public/favicon.png`。通用激活码后台继续使用钥匙图标。
+需要重新导出图标时，在桌面端仓库目录、macOS 环境执行 `pnpm icons:build`。脚本使用系统 `sips`、`iconutil` 和 Tauri 图标命令，更新各尺寸资源及 `public/brand.png`、`public/brand-transparent.png`、`public/favicon.png`。普通代码或文档修改不运行图标导出。通用激活码后台继续使用钥匙图标。
 
 侧栏使用 `public/brand-transparent.png`，直接复制透明底 `original.png`，保留原图透明通道。
 
 `src-tauri/tauri.conf.json` 配置 PNG、ICNS 和 ICO，供窗口与安装包使用。打包命令为 `pnpm package:mac` 和 `pnpm package:win`（Windows x64）。
+
+这些图标原图与已导出文件均随源码保留，是界面和安装包的输入，不按 `dist/` 等构建缓存忽略或清理。打包、签名和交付目录见 [发布说明](../../docs/RELEASE.md)。
 
 尺寸参考：[Apple App Icons](https://developer.apple.com/design/human-interface-guidelines/app-icons)、[Microsoft App Icon Construction](https://learn.microsoft.com/en-us/windows/apps/design/iconography/app-icon-construction)。

@@ -1,3 +1,12 @@
+/**
+ * AI module map
+ * Purpose: expose Radix tooltip provider, trigger, and portaled content.
+ * Entry: TooltipProvider controls timing; Tooltip/Trigger/Content compose each hint.
+ * Flow: Radix owns focus/hover visibility while this file provides themed positioning.
+ * Invariant: hints are supplementary presentation; required operation instructions and
+ * validation errors must not exist only inside a tooltip.
+ */
+
 'use client'
 
 import * as React from 'react'

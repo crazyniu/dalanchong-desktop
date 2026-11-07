@@ -1,3 +1,12 @@
+/**
+ * AI module map
+ * Purpose: compose card containers, headers, actions, content, and footers.
+ * Entry: Card and its named layout slots wrap semantic DOM containers with shared tokens.
+ * Flow: cn merges caller classes; children and DOM props are forwarded unchanged.
+ * Invariant: this file owns spacing/appearance only; fetching, form state, and data
+ * mutations stay with feature components that compose these slots.
+ */
+
 import * as React from "react"
 import { cn } from "cn"
 

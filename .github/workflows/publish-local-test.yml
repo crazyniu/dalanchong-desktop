@@ -1,3 +1,11 @@
+# AI file map
+# Purpose: existing manual Windows test-package publication and download workflow.
+# Entry: workflow_dispatch provides a version tag/current-version pair.
+# Flow: build the Windows installer, retain artifacts, publish to Gitee, and execute the
+# configured updater download check. Shared release concurrency prevents overlap.
+# Boundary: despite its name this mutates remote release state; only run for an explicit
+# publication request and never expose repository signing/Gitee secrets in output.
+
 name: Build Windows test release to Gitee
 on:
   workflow_dispatch:

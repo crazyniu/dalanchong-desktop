@@ -1,3 +1,13 @@
+/**
+ * AI module map
+ * Purpose: connect Recharts to theme-aware series configuration and shared tooltips/legends.
+ * Entry: ChartContainer provides ChartContext and scoped CSS variables; tooltip/legend
+ * content resolves data payload keys through ChartConfig labels, icons, and colors.
+ * Flow: feature screens derive datasets, then pass config and Recharts children here.
+ * Invariants: hooks require the container context; generated chart IDs scope styles so
+ * multiple charts do not overwrite one another. Do not calculate commerce metrics here.
+ */
+
 "use client"
 
 import * as React from "react"

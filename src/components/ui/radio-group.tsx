@@ -1,3 +1,11 @@
+/**
+ * AI module map
+ * Purpose: style mutually exclusive options using Radix RadioGroup.
+ * Entry: RadioGroup and RadioGroupItem expose group state and selected indicators.
+ * Flow: callers provide values/change handlers; Radix owns selection and keyboard semantics.
+ * Invariant: keep option identity stable and leave domain mutations to the owner callback.
+ */
+
 import * as React from 'react'
 import * as RadioGroupPrimitive from '@radix-ui/react-radio-group'
 import { CircleIcon } from 'lucide-react'

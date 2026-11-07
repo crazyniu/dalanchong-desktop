@@ -1,4 +1,11 @@
 <!doctype html>
+<!-- AI file map
+Purpose: minimal HTML entry for the separate collection-log/invitation-progress WebView.
+Entry: Rust overlay.rs opens this page; src/log-overlay.tsx mounts into #root.
+Flow: UI state arrives through native overlay events, not through the main router.
+Invariant: keep the entry isolated and compatible with transparent child-view styling;
+this page must not gain main-window native permissions.
+-->
 <html lang="zh-CN">
   <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>采集错误</title></head>
   <body><div id="root"></div><script type="module" src="/src/log-overlay.tsx"></script></body>

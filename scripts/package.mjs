@@ -1,8 +1,19 @@
+/**
+ * AI module map
+ * Purpose: build native Tauri distribution artifacts for a selected host/architecture.
+ * Entry: package scripts pass platform/arch; RELEASE_BUILD selects signed release handling.
+ * Flow: validate target/signing, stage the original video extension, invoke the native build, collect
+ * bundles into dist-release/tauri/<platform>/<arch>, and write manifest hashes/signatures.
+ * Invariants: do not cross-build on the wrong OS, expose signing secrets, or imply packaging
+ * publishes a release. Run only for an explicitly requested build/package/release task.
+ */
+
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { createRequire } from 'node:module'
+import { prepareVideoExtension } from './prepare-video-extension.mjs'
 
 const root = path.resolve(import.meta.dirname, '..')
 const platform = process.argv[2] || process.platform
@@ -38,7 +49,10 @@ if (!env.TAURI_SIGNING_PRIVATE_KEY)
     '.local/tauri-signing/updater.key'
   )
 const config = {
-  bundle: { targets: platform === 'darwin' ? ['app', 'dmg'] : ['nsis'] },
+  bundle: {
+    targets: platform === 'darwin' ? ['app', 'dmg'] : ['nsis'],
+    resources: await prepareVideoExtension(),
+  },
 }
 const configFile = path.join(root, '.work/tauri-build-config.json')
 await mkdir(path.dirname(configFile), { recursive: true })

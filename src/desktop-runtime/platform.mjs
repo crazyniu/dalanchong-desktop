@@ -1,3 +1,28 @@
+/**
+ * AI module map
+ * Purpose: adapt Kuaishou/Douyin request, response, quota, collection, and invitation schemas.
+ * Entry: makeApi wraps a page executor; classify/interpretObservedResponse normalize
+ * captured page traffic; collect traverses candidates; prepareInvite builds one invitation.
+ * Flow: serialized pageRequest runs in the authenticated account WebView, not Node or a
+ * separate HTTP client. Results become normalized values or errors carrying diagnostics
+ * and beforeSend/rejected/login flags consumed by runner.mjs and runtime.mjs.
+ * Request-local onResponse callbacks receive successful HTTP/business metadata and
+ * redacted, bounded response bodies without changing the parsed-data return contract.
+ * Invariants: reuse only a fresh matching observed page, preserve actual website filters,
+ * normalize observed quota and required commission fields, and keep collection separate
+ * from sending. Invitations do not query or gate on remaining quota.
+ * Collected profiles retain supported business fields only; contact payloads are omitted.
+ * Collection publishes each batch immediately and retains only seen IDs for its total;
+ * the caller owns durable rows. The document-local send SDK is acquired once, while
+ * device identifiers are read again for each invitation.
+ * Monetary display values use yuan, and unavailable metrics remain absent rather than zero.
+ * Never interpret transport uncertainty as confirmed rejection; redact and bound bodies.
+ * Changing endpoint/schema logic also requires reviewing page-bridge.js and browser.rs.
+ */
+
+import { collectionPage } from './collection-pages.mjs'
+export { isSupportedCollectionPage } from './collection-pages.mjs'
+
 export const urls = {
   kuaishou: 'https://cps.kwaixiaodian.com/zone/daren-match/peer-reference',
   douyin: 'https://buyin.jinritemai.com/dashboard/servicehall/daren-square',
@@ -16,11 +41,12 @@ function redactText(text) {
       '$1[已隐藏]'
     )
 }
-function responseBody(text) {
+function responseBody(text, parsed) {
   let body
   try {
-    body = JSON.stringify(JSON.parse(text), (key, value) =>
-      sensitiveKey.test(key)
+    body = JSON.stringify(
+      parsed === undefined ? JSON.parse(text) : parsed,
+      (key, value) => sensitiveKey.test(key)
         ? '[已隐藏]'
         : typeof value === 'string'
           ? redactText(value)
@@ -50,6 +76,8 @@ const isLoginMessage = (message) =>
   )
 
 // Runs in the platform page, retaining its signing hooks and device context.
+// This function is serialized into the account page. Keep its dependencies local:
+// module-scoped helpers/imports are not available inside the remote WebView realm.
 async function pageRequest(platform, path, body, method) {
   let dispatched = false
   try {
@@ -61,14 +89,19 @@ async function pageRequest(platform, path, body, method) {
         .find((x) => x.startsWith('ks-s-ctn='))
       if (token) headers['ks-s-ctn'] = decodeURIComponent(token.slice(9))
     } else if (path === '/connection/pc/im/invite/card/send') {
-      let sdk
-      window.webpackChunkmain.push([
-        ['ecommerce-device-' + crypto.randomUUID()],
-        {},
-        (require) => {
-          sdk = require('413497')
-        },
-      ])
+      let sdk = window.__DALANCHONG_INVITE_SDK__
+      if (!sdk) {
+        // A unique chunk is needed for the callback, but adding one per invite
+        // grows webpack's chunk registry for the entire document lifetime.
+        window.webpackChunkmain.push([
+          ['ecommerce-device-' + crypto.randomUUID()],
+          {},
+          (require) => {
+            sdk = require('413497')
+          },
+        ])
+        window.__DALANCHONG_INVITE_SDK__ = sdk
+      }
       const device = sdk.getNonFxgEcomDid()
       if (!device.web_did) throw Error('设备信息未就绪，请刷新达人广场')
       const client = window.webviewBridge?.callBrowserWindow
@@ -110,7 +143,7 @@ async function pageRequest(platform, path, body, method) {
 }
 
 export function makeApi(contents, platform) {
-  return async (path, body = null, method = body === null ? 'GET' : 'POST') => {
+  return async (path, body = null, method = body === null ? 'GET' : 'POST', onResponse) => {
     if (new URL(contents.getURL()).origin !== new URL(urls[platform]).origin)
       throw apiError(
         path,
@@ -151,11 +184,11 @@ export function makeApi(contents, platform) {
           beforeSend: result.beforeSend,
         }
       )
-    return parseApiResponse(platform, path, method, result)
+    return parseApiResponse(platform, path, method, result, onResponse)
   }
 }
 
-export function parseApiResponse(platform, path, method, result) {
+export function parseApiResponse(platform, path, method, result, onResponse) {
   let data
   try {
     data = JSON.parse(result.text)
@@ -186,12 +219,12 @@ export function parseApiResponse(platform, path, method, result) {
       detail,
       { login: isLoginMessage(result.text) }
     )
-  const reason =
+  const message =
     data.error_msg ||
     data.errorMsg ||
     data.msg ||
-    data.message ||
-    '平台返回失败'
+    data.message
+  const reason = message || '平台返回失败'
   const success = platform === 'kuaishou' ? data.result === 1 : data.code === 0
   if (result.status !== 200 || !success) {
     throw apiError(
@@ -209,16 +242,21 @@ export function parseApiResponse(platform, path, method, result) {
       }
     )
   }
+  onResponse?.({
+    path: path.split('?')[0],
+    method,
+    ...detail,
+    ...(message != null ? { message: redactText(message) } : {}),
+    // The successful reply was parsed above; redact that value without parsing
+    // the same potentially large product response again.
+    body: responseBody(result.text, data),
+  })
   return data
 }
 
 const quotaPaths = {
   kuaishou: '/distribute/pc/seller/invite/contact?inviteType=1',
   douyin: '/connection/pc/im/shop_contact_rights_info',
-}
-
-export async function readQuota(api, platform) {
-  return parseQuota(platform, await api(quotaPaths[platform]))
 }
 
 export function parseQuota(platform, result) {
@@ -279,28 +317,66 @@ export function parseQuota(platform, result) {
   }
 }
 
-// Only platform endpoints with a known response schema are observed.
+// A page can issue unrelated background requests. Only its own list may select
+// the active collection source; all list modes share one latest-request slot.
+const listSources = {
+  'ks-square': {
+    '/distribute/pc/seller/promoter/list': 'ks-square',
+    '/distribute/pc/seller/promoter/search/list': 'ks-search',
+    '/gateway/distribute/platform/reco/promoter': 'ks-recommend',
+  },
+  'ks-peer': {
+    '/gateway/distribute/match/common/orchestration/execute': 'ks-shops',
+    '/gateway/distribute/pc/common/promoter/list': 'ks-shop-authors',
+  },
+  'ks-rank': {
+    '/gateway/distribute/platform/promoter/ranking/query': 'ks-rank',
+  },
+  'dy-square': {
+    '/square_pc_api/square/search_feed_author': 'dy-square',
+    '/square_pc_api/similar_kol/list': 'dy-similar',
+    '/square_pc_api/prd_2_kol/list': 'dy-product',
+    '/square_pc_api/recommend/crowd_pack_rec_author': 'dy-crowd',
+  },
+  'dy-clue': {
+    '/square_pc_api/selection_square_clue/list': 'dy-clue',
+  },
+  'dy-peer': {
+    '/square_pc_api/peer/shopPeerList': 'dy-shops',
+    '/square_pc_api/peer/shopCollectList': 'dy-shops',
+  },
+  'dy-rank': {
+    '/square_pc_api/rank/author/list': 'dy-rank',
+  },
+}
+const recommendationScenes = new Set([
+  'ps_reco_promoter_by_select_item',
+  'ps_reco_promoter_by_select_promoter',
+  'ps_reco_promoter_by_seller_channel',
+  'ps_reco_promoter_by_relation_sameseller',
+  'ps_reco_promoter_data_raise_up',
+])
 const observedPaths = {
   kuaishou: {
-    '/gateway/distribute/match/common/orchestration/execute': 'search',
-    '/gateway/distribute/pc/common/promoter/list': 'promoter',
     '/distribute/pc/seller/invite/contact': 'quota',
     '/gateway/distribute/match/user/basic/login/info': 'account',
   },
   douyin: {
-    '/square_pc_api/square/search_feed_author': 'search',
     '/connection/pc/im/shop_contact_rights_info': 'quota',
-    '/connection/pc/im/promotion/list': 'product',
     '/index/getUser': 'account',
   },
 }
 
-export function classifyObservedRequest(platform, url, body = null) {
+export function classifyObservedRequest(platform, url, body = null, pageUrl) {
   const parsed = new URL(url)
   if (parsed.origin !== new URL(urls[platform]).origin) return null
   const path = parsed.pathname
-  const kind = observedPaths[platform][path]
+  const page = collectionPage(platform, pageUrl)
+  const mode = listSources[page]?.[path]
+  const kind = mode ? 'list' : observedPaths[platform][path]
   if (!kind) return null
+  if (platform === 'kuaishou' && kind === 'quota' && parsed.searchParams.get('inviteType') !== '1')
+    return null
   if (typeof body === 'string') {
     try {
       body = body ? JSON.parse(body) : null
@@ -308,16 +384,36 @@ export function classifyObservedRequest(platform, url, body = null) {
       throw apiError(path, 'POST', '无法读取网页请求参数')
     }
   }
-  if (
-    platform === 'kuaishou' &&
-    kind === 'search' &&
-    body?.scene !== 'distribute_peer_seller_list'
-  )
-    return null
-  if (kind === 'promoter' && body?.sceneCode !== 'ps_seller_coop_promoter_list')
-    return null
-  if (kind === 'search' && !body) return null
-  return { kind, path, body, url, method: body === null ? 'GET' : 'POST' }
+  if (mode === 'ks-shops' && body?.scene !== 'distribute_peer_seller_list') return null
+  if (mode === 'ks-shop-authors' && body?.sceneCode !== 'ps_seller_coop_promoter_list') return null
+  if (mode === 'ks-search' && body?.sceneCode !== 'ps_seller_search_promoter_list') return null
+  if (mode === 'ks-recommend' && !recommendationScenes.has(body?.sceneCode)) return null
+  const method = body === null ? 'GET' : 'POST'
+  if (mode && method === 'GET') {
+    // Keep business filters and pagination, letting the page regenerate signatures.
+    for (const key of ['msToken', 'a_bogus', '_signature', 'fp', 'verifyFp', 'ewid', 'seraph_did'])
+      parsed.searchParams.delete(key)
+    body = Object.fromEntries(parsed.searchParams)
+  }
+  return { kind, mode, path, body, url, method, pageUrl }
+}
+
+function collectionRows(source, result) {
+  switch (source.mode) {
+    case 'ks-shops': return result.dataList
+    case 'ks-shop-authors':
+    case 'ks-recommend': return result.data?.promoterDataInfo
+    case 'ks-square': return result.data?.promoterList
+    case 'ks-search': return result.data?.searchPromoterInfo
+    case 'ks-rank': return result.data?.data
+    case 'dy-shops': return result.data?.shop_list
+    case 'dy-similar':
+    case 'dy-product':
+    case 'dy-clue':
+    case 'dy-crowd': return result.data?.author_list
+    case 'dy-square':
+    case 'dy-rank': return result.data?.list
+  }
 }
 
 export function interpretObservedResponse(
@@ -332,7 +428,6 @@ export function interpretObservedResponse(
     ...metadata,
     text: typeof json === 'string' ? json : JSON.stringify(json),
   })
-  const responseAt = Date.now()
   if (request.kind === 'quota') return { quota: parseQuota(platform, result) }
   if (request.kind === 'account') {
     const id =
@@ -348,143 +443,281 @@ export function interpretObservedResponse(
       return { account: { status: 'offline' } }
     return { account: { shopId: String(id), shopName: name, status: 'online' } }
   }
-  if (request.kind === 'product') {
-    if (!Array.isArray(result.data?.promotion_list))
-      throw apiError(request.path, request.method, '平台未返回有效的商品列表', {
-        status: metadata.status ?? 200,
-        body: JSON.stringify(result),
-      })
-    const query = new URL(request.url).searchParams
-    return {
-      product: {
-        uid: query.get('uid'),
-        query: query.get('query'),
-        items: result.data.promotion_list,
-        responseAt,
-      },
-    }
-  }
-  const list =
-    request.kind === 'promoter'
-      ? result.data?.promoterDataInfo
-      : platform === 'kuaishou'
-        ? result.dataList
-        : result.data?.list
+  const list = collectionRows(request, result)
   if (!Array.isArray(list))
     throw apiError(request.path, request.method, '平台未返回有效的采集列表', {
       status: metadata.status ?? 200,
       body: JSON.stringify(result),
     })
-  return { capture: { ...request, response: result, responseAt } }
+  return { capture: { ...request, response: result, responseAt: Date.now() } }
 }
 
-function capturedPage(search, platform, page) {
-  const observedPage = Number(
-    platform === 'kuaishou'
-      ? (search.body.pageNum ?? 1)
-      : (search.body.page ?? 1)
+// Platform counts may be formatted strings. Accept one disclosed number, not a
+// range or placeholder; amounts retain their disclosed yuan range.
+function collectedNumber(value) {
+  if (value == null) return undefined
+  const match = String(value)
+    .trim()
+    .replace(/[,，]/g, '')
+    .match(/^(\d+(?:\.\d+)?)\s*([万亿])?$/)
+  if (!match) return undefined
+  const multiplier =
+    match[2] === '亿' ? 100_000_000 : match[2] === '万' ? 10_000 : 1
+  const count = Number(match[1]) * multiplier
+  return Number.isFinite(count) ? count : undefined
+}
+
+function collectedAmount(value) {
+  if (value == null) return undefined
+  const amount = String(value).trim()
+  return /\d/.test(amount) ? `¥${amount}` : undefined
+}
+
+// Douyin sale_info ranges are already in yuan. Status 0 is a disclosed range;
+// other statuses must not turn the API's placeholder zeroes into reported sales.
+function douyinSaleRange(sale) {
+  if (
+    sale?.sale_status !== 0 ||
+    sale.sale_low == null ||
+    sale.sale_high == null
   )
-  return observedPage === page && Date.now() - search.responseAt < 60_000
-    ? search.response
-    : undefined
+    return undefined
+  const low = sale.sale_low.toLocaleString('zh-CN')
+  const high = sale.sale_high.toLocaleString('zh-CN')
+  return sale.sale_low === sale.sale_high ? `¥${low}` : `¥${low}-${high}`
 }
 
-export async function collect({
-  platform,
-  capture,
-  request,
-  stopped,
-  progress,
-}) {
-  const unique = new Map()
-  const search = capture.search
-  if (!search) throw Error('请先在平台网页搜索或应用筛选，再开始采集')
-  let page = 1,
-    hasMore = true
+function kuaishouTalent(c, source) {
+  return {
+    id: String(c.promoterId),
+    name: c.nickname,
+    fans: collectedNumber(c.fansNum),
+    avatarUrl: c.headUrl || undefined,
+    gender: { M: '男', F: '女' }[c.gender],
+    region: [c.promoterProvince, c.promoterCity].filter(Boolean).join('·') || undefined,
+    level: c.promoterLevel || c.level || undefined,
+    categories: c.hotSaleChannel,
+    sales7d: collectedAmount(c.viewInfo?.distPayOrderAmt7d),
+    sales30d: collectedAmount(c.viewInfo?.distPayOrderAmt30d),
+    liveCount30d: collectedNumber(c.viewInfo?.relationLiveCnt30d),
+    videoCount30d: collectedNumber(c.viewInfo?.relationVideoCnt30d),
+    liveViews30d: collectedNumber(c.liveAvgVisitorNum ?? c.viewInfo?.PromoterLiveAvgVisitorNum30d),
+    videoViews30d: collectedNumber(c.videoAvgWatchCnt ?? c.viewInfo?.PromoterSingleVideoAvgWatchCnt),
+    avgLiveSales: collectedAmount(c.viewInfo?.liveAvgGmvRange ?? c.liveAvgGMVSquare ?? c.viewInfo?.PromoterLiveAvgGMV30d),
+    avgVideoSales: collectedAmount(c.viewInfo?.videoAvgGmvRange ?? c.videoAvgGmvSquare ?? c.viewInfo?.PromoterSingleVideoAvgGmv),
+    cooperationProducts30d: collectedNumber(c.viewInfo?.onshelfItemNum30d),
+    source,
+  }
+}
+
+function douyinTalent(row, source) {
+  const c = row.author_base
+  return {
+    id: String(c.aweme_id || c.uid),
+    uid: String(c.uid),
+    name: c.nickname,
+    fans: collectedNumber(c.fans_num),
+    avatarUrl: c.avatar || undefined,
+    gender: { 1: '男', 2: '女' }[c.gender],
+    region: c.city || undefined,
+    level: c.author_level == null ? undefined : `LV${c.author_level}`,
+    categories: row.author_tag?.main_cate,
+    contentType:
+      row.author_tag?.author_label_rec_reasons
+        ?.map((tag) => tag.reason)
+        .join(' / ') || undefined,
+    salesMode: row.author_sale?.main_sale_type || undefined,
+    sales30d: douyinSaleRange(row.sale_info?.total_sales),
+    settlement30d: douyinSaleRange(row.sale_info?.total_sales_settle),
+    liveSales30d: douyinSaleRange(row.sale_info?.live_total_sales),
+    videoSales30d: douyinSaleRange(row.sale_info?.video_total_sales),
+    imageTextSales30d: douyinSaleRange(row.sale_info?.image_text_total_sales),
+    windowSales30d: douyinSaleRange(row.sale_info?.window_total_sales),
+    liveCount30d: collectedNumber(row.author_live?.all_live_num_30d),
+    videoCount30d: collectedNumber(row.author_video?.all_video_num_30d),
+    liveViews30d: collectedNumber(row.author_live?.watching_times),
+    videoViews30d: collectedNumber(row.author_video?.watching_times),
+    cooperationLevel: row.author_tag?.cooperation_level || undefined,
+    replyRate: row.author_tag?.high_response_rate || undefined,
+    source,
+  }
+}
+
+// Peer-reference's disclosed zero bounds mean the platform's lowest bracket,
+// not an exact zero. Its open upper bound is encoded as high = 0.
+function douyinShopSaleRange(sale) {
+  if (sale?.status !== 0) return undefined
+  if (sale.low === 0 && sale.high === 0) return '¥0-500'
+  if (sale.high === 0) return `¥${sale.low.toLocaleString('zh-CN')}+`
+  return douyinSaleRange({
+    sale_status: sale.status, sale_low: sale.low, sale_high: sale.high,
+  })
+}
+
+// Peer-reference uses the platform's secure author ID. The official profile and
+// IM account-check flows accept this value directly; do not treat it as a numeric ID.
+function douyinShopTalent(c, shopName) {
+  return {
+    id: c.sec_author_id,
+    uid: c.sec_author_id,
+    name: c.name,
+    fans: collectedNumber(c.fans_num),
+    avatarUrl: c.avatar || undefined,
+    level: c.level == null ? undefined : `LV${c.level}`,
+    categories: c.main_cate,
+    settlement30d: douyinShopSaleRange(c.sale_settle),
+    cooperationProducts30d: collectedNumber(c.promotion_num),
+    liveCount30d: collectedNumber(c.live_num),
+    videoCount30d: collectedNumber(c.video_num),
+    source: shopName,
+  }
+}
+
+// Every mode keeps the website's filters and changes only its own pagination.
+function collectionParameters(source, page) {
+  const body = structuredClone(source.body)
+  if (source.mode === 'ks-shops' || source.mode === 'ks-rank') body.pageNum = page
+  else if (source.mode === 'ks-search') body.listParam.offset = (page - 1) * body.listParam.limit
+  else if (source.mode === 'ks-square' || source.mode === 'ks-recommend') {
+    if (body.limit != null) body.offset = (page - 1) * body.limit
+  } else if (['dy-square', 'dy-similar', 'dy-product', 'dy-crowd', 'dy-clue'].includes(source.mode)) {
+    body.page = page
+    if (source.mode === 'dy-square' || source.mode === 'dy-similar') body.refresh = page === 1
+    if (source.mode === 'dy-product') body.loadmore = page !== 1
+  } else if (source.mode === 'dy-shops' || source.mode === 'dy-rank') body.page_no = page
+  return body
+}
+
+function observedPageNumber(source) {
+  const body = source.body
+  if (source.mode === 'ks-search') return Number(body.listParam.offset) / Number(body.listParam.limit) + 1
+  if (source.mode === 'ks-square' || source.mode === 'ks-recommend')
+    return body.limit == null ? 1 : Number(body.offset ?? 0) / Number(body.limit) + 1
+  return Number(body.pageNum ?? body.page_no ?? body.page ?? 1)
+}
+
+async function collectionResponse(source, page, request) {
+  if (observedPageNumber(source) === page && Date.now() - source.responseAt < 60_000)
+    return source.response
+  const body = collectionParameters(source, page)
+  return source.method === 'GET'
+    ? request(source.path + '?' + new URLSearchParams(body))
+    : request(source.path, body)
+}
+
+function collectionHasMore(source, result, page) {
+  if (!collectionRows(source, result).length) return false
+  const body = source.body
+  switch (source.mode) {
+    case 'ks-shops': return page * Number(body.pageSize) < result.total
+    case 'ks-rank': return page * Number(body.pageSize) < result.data.total
+    case 'ks-square':
+    case 'ks-recommend': return body.limit != null && page * Number(body.limit) < result.data.total
+    case 'ks-search': return page * Number(body.listParam.limit) < result.data.total
+    case 'dy-square':
+    case 'dy-similar':
+    case 'dy-product':
+    case 'dy-crowd':
+    case 'dy-clue':
+    case 'dy-shops': return result.data.has_more
+    // The ranking page omits page_size when changing boards; its API defaults to 20.
+    case 'dy-rank': return page * Number(body.page_size ?? 20) < result.data.total_num
+    default: return false
+  }
+}
+
+export async function collect({ platform, capture, request, stopped, progress }) {
+  const source = capture.list
+  if (!source) throw Error('请先在当前平台页面搜索或应用筛选')
+  const unique = new Set()
+  const append = async (batch, page, shopName) => {
+    for (const candidate of batch) unique.add(candidate.id)
+    const label = shopName ? `${shopName} · 合作达人第 ${page} 页` : `采集第 ${page} 页`
+    await progress(unique.size, `${label} · ${unique.size} 位达人`, batch)
+  }
+  let page = 1
+  let hasMore = true
   while (hasMore && !stopped()) {
-    if (platform === 'kuaishou') {
-      const body = { ...search.body, pageNum: page }
-      const result =
-        capturedPage(search, platform, page) ||
-        (await request(search.path, body))
-      for (const shop of result.dataList) {
+    const result = await collectionResponse(source, page, request)
+    const rows = collectionRows(source, result)
+    if (source.mode === 'ks-shops') {
+      for (const shop of rows) {
         if (stopped()) break
-        const template = capture.promoter?.body || {
+        const response = await request('/gateway/distribute/pc/common/promoter/list', {
           sceneCode: 'ps_seller_coop_promoter_list',
-          ext: { timeRange: '7d', sortField: 'dist_pay_order_amt_7d' },
-        }
-        const observed = capture.promoter
-        const cached =
-          String(observed?.body.ext.sellerId) === String(shop.sellerId) &&
-          Date.now() - observed.responseAt < 60_000
-            ? observed.response
-            : undefined
-        const data = (
-          cached ||
-          (await request('/gateway/distribute/pc/common/promoter/list', {
-            ...template,
-            ext: { ...template.ext, sellerId: String(shop.sellerId) },
-          }))
-        ).data.promoterDataInfo
-        const batch = data
+          ext: { timeRange: '7d', sortField: 'dist_pay_order_amt_7d', sellerId: String(shop.sellerId) },
+        })
+        const name = shop.sellerName || shop.shopName || shop.sellerNickName || String(shop.sellerId)
+        await append(response.data.promoterDataInfo
           .filter((c) => !c.nickname.includes('鼠'))
-          .map((c) => ({
-            id: String(c.promoterId),
-            name: c.nickname,
-            fans: c.fansNum,
-            source:
-              shop.sellerName ||
-              shop.shopName ||
-              shop.sellerNickName ||
-              String(shop.sellerId),
-          }))
-        for (const candidate of batch) unique.set(candidate.id, candidate)
-        await progress(
-          unique.size,
-          `采集第 ${page} 页 · ${unique.size} 位达人`,
-          batch
-        )
+          .map((c) => kuaishouTalent(c, name)), page)
       }
-      hasMore =
-        result.dataList.length > 0 && page * body.pageSize < result.total
-    } else {
-      const data = (
-        capturedPage(search, platform, page) ||
-        (await request(search.path, {
-          ...search.body,
-          page,
-          refresh: page === 1,
-        }))
-      ).data
-      const batch = data.list.map((row) => {
-        const c = row.author_base
-        return {
-          id: String(c.aweme_id || c.uid),
-          uid: String(c.uid),
-          name: c.nickname,
-          fans: c.fans_num,
-          source: '达人广场 · 当前筛选',
+    } else if (source.mode === 'ks-rank') {
+      await append(rows.filter((c) => !c.nickName.includes('鼠')).map((c) => ({
+        id: String(c.promoterId), name: c.nickName,
+        fans: collectedNumber(c.fansCount), avatarUrl: c.headUrl || undefined,
+        gender: { M: '男', F: '女' }[c.gender], categories: c.mainChannelInfoTop3,
+        source: '达人排行榜 · 当前榜单',
+      })), page)
+    } else if (platform === 'kuaishou') {
+      const candidates = source.mode === 'ks-search'
+        ? [...rows, ...(result.data.recoPromoterInfo || [])] : rows
+      const label = source.mode === 'ks-shop-authors' ? '同行合作参考 · 当前店铺' : '达人广场'
+      await append(candidates.filter((c) => !c.nickname.includes('鼠'))
+        .map((c) => kuaishouTalent(c, label)), page)
+    } else if (source.mode === 'dy-shops') {
+      for (const shop of rows) {
+        if (stopped()) break
+        let authorPage = 1
+        let moreAuthors = true
+        while (moreAuthors && !stopped()) {
+          // Shop filters select shops. Author queries use the shop page's own
+          // 30-day defaults, rather than applying a shop keyword to creator names.
+          const query = new URLSearchParams({
+            sec_shop_id: shop.sec_shop_id, day: '30',
+            page_no: String(authorPage), page_size: '20',
+            query: '', log_id: '', main_cate: '', first_cate: '',
+            sort_field: 'sale_settle', sort_type: '1',
+          })
+          const { data } = await request('/square_pc_api/shop/shopProfileAuthorList?' + query)
+          await append(data.author_list.map((c) => douyinShopTalent(c, shop.name)), authorPage, shop.name)
+          moreAuthors = data.has_more && data.author_list.length > 0
+          authorPage++
         }
-      })
-      for (const candidate of batch) unique.set(candidate.id, candidate)
-      hasMore = data.has_more && data.list.length > 0
-      await progress(
-        unique.size,
-        `采集第 ${page} 页 · ${unique.size} 位达人`,
-        batch
-      )
+      }
+    } else if (source.mode === 'dy-rank') {
+      await append(rows.map((c) => ({
+        id: String(c.uid), uid: String(c.uid), name: c.nickname,
+        fans: collectedNumber(c.fans_num), avatarUrl: c.avatar || undefined,
+        categories: c.indus_cate, source: '达人排行榜 · 当前榜单',
+      })), page)
+    } else if (source.mode === 'dy-clue') {
+      // Intent rows wrap the same author schema used by the talent square.
+      await append(rows.map((row) => douyinTalent(row.author_data, '意向带货达人')), page)
+    } else if (['dy-square', 'dy-similar', 'dy-product', 'dy-crowd'].includes(source.mode)) {
+      const authors = source.mode === 'dy-similar'
+        ? rows.filter((row) => String(row.author_data.author_base.uid) !== String(source.body.author_id))
+        : rows
+      await append(authors.map((row) => douyinTalent(
+        source.mode === 'dy-similar' || source.mode === 'dy-product' ? row.author_data : row,
+        '达人广场'
+      )), page)
     }
+    hasMore = collectionHasMore(source, result, page)
     page++
   }
-  return [...unique.values()]
+  return unique.size
 }
 
+// Resolve platform rules and build a send request, but do not dispatch the invitation.
+// InviteRunner persists the sending record before executing the returned path/body.
+// Kuaishou contact is the raw contact endpoint's data; no quota gates the send.
 export async function prepareInvite(
   api,
   platform,
   config,
   candidate,
-  quota,
+  contact,
   tags
 ) {
   const productIds = [
@@ -496,7 +729,6 @@ export async function prepareInvite(
     ),
   ]
   if (platform === 'kuaishou') {
-    const contact = quota.contact
     const phone = config.phone.trim() || contact.phoneNumber
     const wechat = config.wechat.trim() || contact.wechatId
     if (!contact.inviteContactName || !phone || !wechat)

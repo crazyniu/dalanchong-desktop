@@ -1,3 +1,13 @@
+/**
+ * AI module map
+ * Purpose: compose explicit destructive confirmations from Radix AlertDialog primitives.
+ * Entry: Root/Trigger/Content plus Action/Cancel, title, description, and layout exports.
+ * Flow: the caller controls open state and performs the confirmed operation; this file
+ * supplies portal, overlay, focus handling, button variants, and accessibility slots.
+ * Invariant: Escape is prevented; Radix alert-dialog outside interaction is not an
+ * approval. Preserve explicit user action before destructive callbacks.
+ */
+
 import * as React from 'react'
 import * as AlertDialogPrimitive from '@radix-ui/react-alert-dialog'
 import { cn } from '@/lib/utils'

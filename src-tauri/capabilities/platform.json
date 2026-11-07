@@ -9,11 +9,18 @@
   "remote": {
     "urls": [
       "https://cps.kwaixiaodian.com/*",
-      "https://buyin.jinritemai.com/*"
+      "https://buyin.jinritemai.com/*",
+      "https://compass.jinritemai.com/*",
+      "https://www.douyin.com/*",
+      "https://www.kuaishou.com/*",
+      "https://www.kuaishou.cn/*",
+      "https://v.kuaishou.com/*",
+      "https://live.kuaishou.com/*"
     ]
   },
   "permissions": [
     "allow-platform-result",
-    "allow-platform-observe"
+    "allow-platform-observe",
+    "allow-platform-route"
   ]
 }

@@ -1,3 +1,13 @@
+/**
+ * AI module map
+ * Purpose: share an explicit confirmation UI for destructive list/history actions.
+ * Entry: ClearDataButton receives the label, description, disabled state, and async onClear.
+ * Flow: open confirmation, await the supplied operation, close only on success, and
+ * surface failures through the toast while releasing the busy state.
+ * Invariant: the caller owns scope and deletion semantics; this component never decides
+ * which data to erase or treats clicking outside as confirmation.
+ */
+
 import { useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import { toast } from 'sonner'

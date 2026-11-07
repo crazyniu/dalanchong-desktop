@@ -1,3 +1,11 @@
+/**
+ * AI module map
+ * Purpose: wrap Radix Label with shared typography and disabled-state styling.
+ * Entry: Label passes htmlFor and native primitive props to preserve input association.
+ * Flow: the caller supplies control IDs and text.
+ * Invariant: retain semantic label/control linking; this file has no field state or validation.
+ */
+
 'use client'
 
 import * as React from 'react'

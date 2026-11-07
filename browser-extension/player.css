@@ -1,0 +1,39 @@
+/**
+ * AI file map
+ * Purpose: explicit-close preview dialog and playback controls matching extension tokens.
+ * Entry: popup.html and manager.html load this for player.js-created markup.
+ * Flow: media aspect, bounds and playback state size the dark video surface and controls.
+ * Boundary: player.js owns HLS/media cleanup; normal dialog surfaces remain neutral/white.
+ */
+.preview-dialog { --width: 860px; }
+.preview-dialog::part(dialog) { max-width: calc(100vw - 32px); }
+.preview-dialog::part(header) { padding: 16px; }
+.preview-dialog::part(title) { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.preview-dialog::part(body) { padding: 0; }
+.preview-dialog::part(footer) { padding: 16px; }
+.player { --player-h: min(70vh, 640px); position: relative; overflow: hidden; background: #020617; user-select: none; }
+#preview-video { display: block; width: 100%; height: var(--player-h); object-fit: contain; cursor: pointer; }
+.player:fullscreen { --player-h: 100vh; display: grid; align-items: center; }
+.player-big-play { position: absolute; top: 50%; left: 50%; display: grid; place-items: center; width: 60px; height: 60px; padding: 0 0 0 4px; border: 1px solid rgb(255 255 255 / 50%); border-radius: 50%; background: rgb(15 23 42 / 80%); color: #fff; cursor: pointer; transform: translate(-50%, -50%); }
+.player-big-play wa-icon { font-size: 26px; }
+.player-big-play:hover { background: #334155; }
+.player[data-paused="false"] .player-big-play, .player:has(.player-loading:not([hidden])) .player-big-play { opacity: 0; pointer-events: none; }
+.player-loading { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+.player-loading wa-spinner { font-size: 30px; --indicator-color: #f8fafc; --track-color: rgb(255 255 255 / 20%); }
+.player-controls { position: absolute; left: 0; right: 0; bottom: 0; padding: 28px 10px 6px; background: linear-gradient(to top, rgb(2 6 23 / 90%), rgb(2 6 23 / 45%) 55%, transparent); color: #f8fafc; transition: opacity .2s; }
+.player[data-paused="false"]:not(:hover):not(:focus-within) .player-controls { opacity: 0; }
+.player-bar { display: flex; align-items: center; gap: 4px; height: 40px; }
+.player-gap { flex: 1; }
+.player-btn { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 10px; background: transparent; color: inherit; cursor: pointer; }
+.player-btn:hover { background: rgb(255 255 255 / 14%); }
+.player-btn:focus-visible, .player-big-play:focus-visible { outline: 2px solid #e2e8f0; outline-offset: 2px; }
+.player-time { margin-left: 6px; font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; color: #e2e8f0; }
+.player-seek { --p: 0%; --b: 0%; display: block; width: calc(100% - 12px); height: 18px; margin: 0 6px; background: transparent; cursor: pointer; appearance: none; -webkit-appearance: none; }
+.player-seek:disabled { cursor: default; opacity: .5; }
+.player-seek:focus-visible { outline: 2px solid #e2e8f0; outline-offset: 2px; border-radius: 4px; }
+.player-seek::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, #f8fafc var(--p), rgb(255 255 255 / 50%) var(--p) var(--b), rgb(255 255 255 / 24%) var(--b)); }
+.player-seek::-webkit-slider-thumb { width: 14px; height: 14px; margin-top: -5px; border: 0; border-radius: 50%; background: #fff; appearance: none; -webkit-appearance: none; }
+.player-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid #fde68a; background: #fffbeb; color: var(--warn); font-size: 14px; }
+.player-notice span { flex: 1; min-width: 0; }
+.preview-footer { display: flex; align-items: center; gap: 10px; width: 100%; }
+.preview-meta { flex: 1; min-width: 0; color: var(--ink-3); text-align: left; }

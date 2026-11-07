@@ -1,3 +1,13 @@
+/**
+ * AI module map
+ * Purpose: existing unit coverage for runtime orchestration with an injected native transport.
+ * Entry: node:test cases construct harness() using fake invoke/listen callbacks and in-memory data.
+ * Flow: emit synthetic browser events, inspect requested operations/saved snapshots, and
+ * exercise quota/filter/login state without real platform accounts.
+ * Boundary: these fixtures document expected contracts, not production API availability
+ * or live licensing. Comment maintenance must not run, extend, or change the tests.
+ */
+
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { makeApi, urls } from './platform.mjs'
@@ -15,9 +25,13 @@ function harness(
   const bridge = createRuntime(
     async (command, args) => {
       calls.push({ command, args })
-      if (command === 'license_verify') return { valid: true }
+      if (command === 'license_state') return { valid: true }
       if (command === 'runtime_load') return structuredClone(data)
       if (command === 'runtime_save') saved.push(structuredClone(args.data))
+      if (command === 'database_query') {
+        assert.equal(args.request.kind, 'record')
+        return structuredClone(data.records.find((row) => row.id === args.request.id))
+      }
       if (command === 'browser_prepare')
         return { url: urls[args.account.platform] }
       if (command === 'platform_eval') return evaluate(args)
@@ -63,19 +77,23 @@ function identity(h, order, data, workspace = false) {
 }
 
 test('confirmed popup login closes once and an old workspace quota failure cannot expire it', async () => {
-  let finishQuota
-  const quota = new Promise((resolve) => {
-    finishQuota = resolve
-  })
-  const h = harness(undefined, () => quota)
+  const h = harness()
+  await h.bridge.getLicenseState()
   await h.bridge.openAccountLogin({
     id: 'a',
     platform: 'douyin',
     name: '账号备注',
   })
   h.browser({ type: 'ready', url: urls.douyin })
+  const quotaRequest = {
+    kind: 'quota', order: 1,
+    path: '/connection/pc/im/shop_contact_rights_info',
+    url: 'https://buyin.jinritemai.com/connection/pc/im/shop_contact_rights_info',
+    method: 'GET', body: null,
+  }
+  h.browser({ type: 'response', request: { ...quotaRequest, phase: 'pending' } })
   await new Promise(setImmediate)
-  assert.equal(h.calls.filter((c) => c.command === 'platform_eval').length, 1)
+  assert.equal(h.calls.filter((c) => c.command === 'platform_eval').length, 0)
 
   identity(h, 1, { shop_id: '0', shop_name: '' })
   assert.equal(
@@ -84,10 +102,13 @@ test('confirmed popup login closes once and an old workspace quota failure canno
   )
   identity(h, 2, { shop_id: 'shop-1', shop_name: '店铺一' })
   identity(h, 3, { shop_id: 'shop-1', shop_name: '店铺一' })
-  finishQuota({
-    status: 200,
-    url: urls.douyin,
-    text: JSON.stringify({ code: -2, msg: '用户未登录' }),
+  h.browser({
+    type: 'response', request: { ...quotaRequest, phase: 'complete' },
+    response: {
+      status: 200,
+      url: quotaRequest.url,
+      text: JSON.stringify({ code: -2, msg: '用户未登录' }),
+    },
   })
   await new Promise(setImmediate)
 
@@ -104,7 +125,7 @@ test('confirmed popup login closes once and an old workspace quota failure canno
     h.calls.filter((c) => c.command === 'browser_finish_login'),
     [{ command: 'browser_finish_login', args: { accountId: 'a' } }]
   )
-  assert.equal(h.calls.filter((c) => c.command === 'platform_eval').length, 1)
+  assert.equal(h.calls.filter((c) => c.command === 'platform_eval').length, 0)
   assert.equal(
     h.calls.filter((c) => c.command === 'diagnostic_append').length,
     0
@@ -113,6 +134,7 @@ test('confirmed popup login closes once and an old workspace quota failure canno
 
 test('opening an existing account keeps its browser open and another workspace cannot finish popup login', async () => {
   const h = harness()
+  await h.bridge.getLicenseState()
   const account = { id: 'a', platform: 'douyin', name: '账号备注' }
   await h.bridge.openAccountLogin(account, false)
   identity(h, 1, { shop_id: 'shop-1', shop_name: '店铺一' })
@@ -133,12 +155,13 @@ test('opening an existing account keeps its browser open and another workspace c
   )
 })
 
-test('restart converts in-flight records to review, stops tasks and preserves native preferences', async () => {
+test('restart retains native-recovered records in the database, stops tasks and preserves native preferences', async () => {
   const h = harness({
     logs: [],
     talents: [],
     collections: [],
-    records: [{ id: 'r', status: 'sending' }],
+    // Native runtime_load has already recovered uncertain sends in SQLite.
+    records: [{ id: 'r', status: 'review' }],
     tasks: {
       a: {
         accountId: 'a',
@@ -153,13 +176,15 @@ test('restart converts in-flight records to review, stops tasks and preserves na
     configs: { a: { products: '123' } },
   })
   const data = await h.bridge.initialize()
-  assert.equal(data.records[0].status, 'review')
+  assert.deepEqual(data.records, [])
+  assert.equal((await h.bridge.queryData({ kind: 'record', id: 'r' })).status, 'review')
   assert.equal(data.tasks.a.status, 'stopped')
   assert.equal(data.accounts[0].status, 'offline')
   assert.equal(data.accounts[0].name, '测试备注')
   assert.equal(data.logs.length, 1)
   assert.deepEqual(data.tasks.a.logs, [])
-  assert.equal(h.saved.at(-1).records[0].status, 'review')
+  assert.equal(h.saved.at(-1).records, undefined)
+  assert.equal(h.saved.at(-1).tasks.a.status, 'stopped')
   assert.equal(h.calls.filter((c) => c.command === 'platform_eval').length, 0)
   const native = h.calls.find((c) => c.command === 'set_task_state')
   assert.equal(native.args.running, false)
@@ -175,14 +200,16 @@ test('stop works before initialization without invoking authorization or reading
 
 test('observation keeps newest workspace filters and excludes login-window search results', async () => {
   const h = harness()
+  await h.bridge.getLicenseState()
   await h.bridge.prepareAccount({ id: 'a', platform: 'douyin' })
   const request = (order, phase) => ({
-    kind: 'search',
+    kind: 'list',
     order,
     phase,
     path: '/square_pc_api/square/search_feed_author',
     url: 'https://buyin.jinritemai.com/square_pc_api/square/search_feed_author',
     method: 'POST',
+    pageUrl: urls.douyin,
     body: { page: 1, filters: { keyword: String(order) } },
   })
   const response = {
@@ -258,7 +285,8 @@ test('stop during asynchronous native authorization closes the gate before any t
     },
     getConnection: () => ({
       platform: 'douyin',
-      capture: { search: { body: {}, path: '/search' } },
+      url: urls.douyin,
+      capture: { list: { mode: 'dy-square', method: 'POST', body: {}, path: '/search' } },
       api: async () => {
         requests++
         return { data: { list: [], has_more: false } }

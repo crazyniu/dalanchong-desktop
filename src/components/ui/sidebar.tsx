@@ -1,3 +1,14 @@
+/**
+ * AI module map
+ * Purpose: provide shared navigation layout, context, menu slots, and responsive variants.
+ * Entry: SidebarProvider owns controlled/uncontrolled open state; Sidebar and its named
+ * menu/layout components consume that context, useIsMobile, Sheet, and Tooltip wrappers.
+ * Flow: width CSS variables and data-state drive layout; setOpen also writes a UI cookie.
+ * Invariant: AppShell intentionally keeps navigation expanded and does not expose collapse
+ * controls. Retained generic variants are component capabilities, not permission to change
+ * that product requirement or use sidebar state as durable business state.
+ */
+
 import * as React from 'react'
 import { Slot } from '@radix-ui/react-slot'
 import { VariantProps, cva } from 'class-variance-authority'

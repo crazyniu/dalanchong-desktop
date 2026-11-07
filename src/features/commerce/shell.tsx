@@ -1,5 +1,19 @@
-import { Link, Outlet, useLocation } from '@tanstack/react-router'
-import { LayoutDashboard, Video, Music2, UsersRound } from 'lucide-react'
+/**
+ * AI module map
+ * Purpose: compose persistent navigation and global native-view hosts around route content.
+ * Entry: AppShell is the TanStack root route used by main.tsx.
+ * Flow: the fixed sidebar links the dashboard, browser accounts, and separate platform
+ * invitation entries, and the tutorial; invitation links and active states include the platform query.
+ * Title/version appear at top, license expiry at bottom, and Outlet renders commerce.
+ * BrowserLayer lives outside individual pages to retain invitation sessions and global
+ * progress for all running invitation tasks across both platforms and covering dialogs.
+ * OnboardingGuide owns the first-use walkthrough and tutorial-triggered replay.
+ * Invariant: changing a route must not recreate authoritative task state or collapse
+ * the sidebar; native view visibility is coordinated by browser.tsx.
+ */
+
+import { Link, Outlet, useLocation, useMatch } from '@tanstack/react-router'
+import { BookOpen, LayoutDashboard, Music2, Store, Video } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import {
   Sidebar,
@@ -16,16 +30,22 @@ import {
 import { BrowserLayer } from './browser'
 import { desktop } from './desktop'
 import { LicenseStatus } from './license'
+import { OnboardingGuide } from './onboarding'
 import { UpdateStatus } from './update'
 
 const navigation = [
   { title: '数据概览', to: '/' as const, icon: LayoutDashboard },
-  { title: '快手邀约', to: '/kuaishou' as const, icon: Video },
-  { title: '抖音邀约', to: '/douyin' as const, icon: Music2 },
-  { title: '平台账号', to: '/accounts' as const, icon: UsersRound },
+  { title: '多店铺', to: '/workbench' as const, icon: Store },
+  { title: '抖音达人邀约', to: '/invites' as const, platform: 'douyin' as const, icon: Music2 },
+  { title: '快手达人邀约', to: '/invites' as const, platform: 'kuaishou' as const, icon: Video },
+  { title: '使用教程', to: '/tutorial' as const, icon: BookOpen },
 ]
+
 export function AppShell() {
   const pathname = useLocation({ select: (l) => l.pathname })
+  const inviteMatch = useMatch({ from: '/invites', shouldThrow: false })
+  const platform = inviteMatch?.search.platform ?? 'kuaishou'
+
   return (
     <SidebarProvider
       open
@@ -54,18 +74,14 @@ export function AppShell() {
           <SidebarGroup className='px-3 pt-4'>
             <SidebarMenu className='gap-2'>
               {navigation.map((item) => (
-                <SidebarMenuItem key={item.to}>
+                <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton
                     asChild
-                    tooltip={item.title}
-                    isActive={pathname === item.to}
+                    isActive={pathname === item.to && (!item.platform || platform === item.platform)}
                     className='h-11 rounded-lg px-3 text-sm data-[active=true]:font-semibold'
                   >
-                    <Link to={item.to}>
-                      <item.icon
-                        className='mr-1 size-[18px]'
-                        strokeWidth={1.7}
-                      />
+                    <Link to={item.to} search={item.platform ? { platform: item.platform } : undefined}>
+                      <item.icon className='mr-1 size-[18px]' strokeWidth={1.7} />
                       <span>{item.title}</span>
                     </Link>
                   </SidebarMenuButton>
@@ -87,6 +103,7 @@ export function AppShell() {
         <Outlet />
       </SidebarInset>
       <BrowserLayer />
+      <OnboardingGuide />
     </SidebarProvider>
   )
 }

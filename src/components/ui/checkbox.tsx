@@ -1,3 +1,12 @@
+/**
+ * AI module map
+ * Purpose: style the Radix checkbox and its checked indicator.
+ * Entry: Checkbox forwards checked/onCheckedChange, disabled, and accessibility props.
+ * Flow: caller-owned selection feeds Radix state attributes, which drive appearance.
+ * Invariant: selected row IDs and indeterminate/all-page logic belong to the table owner;
+ * this primitive must not infer selection scope or perform list mutations.
+ */
+
 import * as React from 'react'
 import * as CheckboxPrimitive from '@radix-ui/react-checkbox'
 import { CheckIcon } from 'lucide-react'

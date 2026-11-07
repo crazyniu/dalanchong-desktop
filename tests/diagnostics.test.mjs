@@ -1,3 +1,12 @@
+/**
+ * AI module map
+ * Purpose: existing runtime diagnostic tests for redaction, history bounds, and write failures.
+ * Entry: node:test cases call createRuntime through fixture() with an in-memory fake IPC.
+ * Flow: synthesize failures, capture emitted/saved diagnostic data, and assert expected behavior.
+ * Boundary: no real credential or account data belongs in fixtures. These tests do not
+ * establish native file persistence or production acceptance; do not run them for comment edits.
+ */
+
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createRuntime } from '../src/desktop-runtime/runtime.mjs'
@@ -9,9 +18,10 @@ function fixture({ logs = [], append = async () => {} } = {}) {
   const bridge = createRuntime(
     async (command, args) => {
       commands.push(command)
-      if (command === 'license_verify') return { valid: true }
+      if (command === 'license_state') return { valid: true }
       if (command === 'runtime_load')
-        return { logs, talents: [], records: [], tasks: {}, collections: [] }
+        // The native database load returns the newest 1000 error rows only.
+        return { logs: logs.filter((row) => row.level === 'error').slice(-1000), tasks: {}, talentCounts: {} }
       if (command === 'update_check')
         throw Object.assign(Error('上游不可用 token=private-token'), {
           response: {
@@ -67,7 +77,9 @@ test('runtime restores errors, limits displayed history and sends redacted diagn
     nested: { cookie: '[已隐藏]' },
   })
   assert.ok(!JSON.stringify(entry).includes('private-'))
-  const displayed = events.filter((event) => event.type === 'runtime').at(-1)
+  const displayed = events
+    .filter((event) => event.type === 'runtime' && event.data.logs)
+    .at(-1)
   assert.equal(displayed.data.logs.length, 1000)
   assert.equal(displayed.data.logs[0].id, 'old-1')
   assert.deepEqual(displayed.data.logs.at(-1), entry)

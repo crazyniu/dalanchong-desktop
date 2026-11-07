@@ -1,4 +1,44 @@
-import { collect, readQuota, prepareInvite } from './platform.mjs'
+/**
+ * AI module map
+ * Purpose: execute per-account collection and invitation jobs over an injected API.
+ * Entry: InviteRunner receives data/save/emit/connection callbacks; collect, start, and
+ * stop are called by runtime.mjs. validateConfig and alreadyHandled encode shared rules.
+ * Flow: snapshot filters/config/selected talents, register and save the task, pace work,
+ * persist collection batches or invitation outcomes, then release native task state.
+ * Collection keeps its delay after each API call; invitation intervals separate send
+ * call starts only. Preflight, responses and persistence consume that interval naturally.
+ * The first send has no timer delay. Quota availability is decided by the send response;
+ * Kuaishou's contact endpoint is read once for required sender fields, not quota checks.
+ * State: jobs and task snapshots use accountId:kind keys, allowing one collection
+ * and one invitation per account with independent cancellation and activity batches.
+ * Native busy state aggregates both jobs; only an active collection masks the page.
+ * SQLite owns talents,
+ * records and logs; only current tasks and 200 queued candidates live in the runner.
+ * invite_ids builds the queue from talents with no account-scoped invitation record;
+ * every historical status blocks entry, without a date cutoff. Totals use that queue.
+ * Collection upserts preserve account-scoped IDs through the database UID index.
+ * Each invitation step commits its changed record and task; UI receives task updates
+ * and database invalidations rather than full history arrays. Activity is persisted
+ * to the log table and only its latest 200 entries remain in the visible task.
+ * Invitation rows retain their own send response, or the final preflight response when
+ * skipped; platform.mjs supplies redacted bodies. Quota replies never enter these rows.
+ * Per-talent collection messages show names and insert/update results; IDs stay in data.
+ * Collection snapshots the observed list parameters and shares its immutable response;
+ * later observations replace captures rather than mutating a running job's response.
+ * platform.mjs owns source traversal and pagination rules.
+ * Invariants: save 'sending' before dispatch. Kuaishou sends are at least two seconds
+ * apart. Its create-invite code 400010 waits five seconds and the configured interval,
+ * then retries the same record without advancing counts. Cancellation retains that
+ * dispatched record for review. Other uncertain outcomes become review and stop.
+ * beforeSend failures cannot be counted as sent; account switching must not mutate
+ * a running job's captured input.
+ */
+
+import {
+  collect,
+  isSupportedCollectionPage,
+  prepareInvite,
+} from './platform.mjs'
 
 export function validateConfig(platform, config) {
   const ids = [
@@ -20,12 +60,13 @@ export function validateConfig(platform, config) {
     throw Error('请填写有效邀约话术，抖音最多 150 字')
   if (platform === 'douyin' && !config.phone.trim() && !config.wechat.trim())
     throw Error('请填写手机号或微信号')
+  const minimumInterval = platform === 'kuaishou' ? 2000 : 500
   if (
     !Number.isSafeInteger(config.interval) ||
-    config.interval < 500 ||
+    config.interval < minimumInterval ||
     config.interval > 60000
   )
-    throw Error('请求间隔为 500–60000 毫秒')
+    throw Error(`邀约间隔为 ${minimumInterval}–60000 毫秒`)
   if (
     config.maxInvites != null &&
     (!Number.isSafeInteger(config.maxInvites) || config.maxInvites < 1)
@@ -37,30 +78,32 @@ export function alreadyHandled(records, accountId, platform, talentId) {
   return records.some(
     (r) =>
       r.accountId === accountId &&
-      r.talentId === talentId &&
-      (r.status === 'review' ||
-        r.status === 'sending' ||
-        ((r.status === 'success' || r.recentInvite) &&
-          (platform === 'douyin' ||
-            Date.now() - Date.parse(r.resolution || r.time) < 7 * 86400000)))
+      r.platform === platform &&
+      r.talentId === talentId
   )
+}
+
+async function waitUntil(nextAt, job) {
+  const wait = nextAt - Date.now()
+  if (wait > 0 && !job.stopped) {
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, wait)
+      job.wake = () => {
+        clearTimeout(timer)
+        resolve()
+      }
+    })
+    job.wake = null
+  }
+  if (job.stopped) throw Object.assign(Error('已停止'), { beforeSend: true })
 }
 
 function pacedRequest(api, interval, job) {
   let nextAt = 0
-  return async (path, body = null) => {
-    const wait = nextAt - Date.now()
-    if (wait > 0)
-      await new Promise((resolve) => {
-        const timer = setTimeout(resolve, wait)
-        job.wake = () => {
-          clearTimeout(timer)
-          resolve()
-        }
-      })
-    if (job.stopped) throw Object.assign(Error('已停止'), { beforeSend: true })
+  return async (path, body = null, onResponse) => {
+    await waitUntil(nextAt, job)
     try {
-      return await api(path, body)
+      return await api(path, body, undefined, onResponse)
     } finally {
       nextAt = Date.now() + interval
     }
@@ -71,22 +114,45 @@ export class InviteRunner {
   constructor({
     data,
     save,
+    query,
     emit,
     getConnection,
-    onQuota,
     onLog = () => {},
     onTaskState = async () => {},
   }) {
     Object.assign(this, {
       data,
       save,
+      query,
       emit,
       getConnection,
-      onQuota,
       onLog,
       onTaskState,
     })
     this.jobs = new Map()
+    this.taskStateQueues = new Map()
+  }
+  hasJobs(accountId) {
+    return this.jobs.has(`${accountId}:collect`) || this.jobs.has(`${accountId}:invite`)
+  }
+  syncTaskState(accountId) {
+    // Starts, stops and completions can overlap across kinds. Serialize native
+    // writes per account and derive the aggregate when the queued write executes.
+    const previous = this.taskStateQueues.get(accountId) || Promise.resolve()
+    const pending = previous.then(() => {
+      const collection = this.jobs.get(`${accountId}:collect`)
+      const invitation = this.jobs.get(`${accountId}:invite`)
+      const collecting = Boolean(collection && !collection.stopped)
+      const inviting = Boolean(invitation && !invitation.stopped)
+      return this.onTaskState(accountId, collecting || inviting, collecting)
+    })
+    // A failed native registration is reported to its caller; cleanup still runs.
+    const settled = pending.catch(() => {}).finally(() => {
+      if (this.taskStateQueues.get(accountId) === settled)
+        this.taskStateQueues.delete(accountId)
+    })
+    this.taskStateQueues.set(accountId, settled)
+    return pending
   }
   log(task, message, response) {
     const entry = {
@@ -100,11 +166,35 @@ export class InviteRunner {
     this.onLog({
       ...entry,
       accountId: task.accountId,
-      platform: this.jobs.get(task.accountId).platform,
+      platform: this.jobs.get(`${task.accountId}:${task.kind}`).platform,
       taskId: task.startedAt,
       kind: task.kind,
     })
-    this.emit()
+    this.emit(task)
+  }
+  activity(task, entries) {
+    const job = this.jobs.get(`${task.accountId}:${task.kind}`)
+    const activities = entries.map((entry) => ({
+      ...entry,
+      id: crypto.randomUUID(),
+      accountId: task.accountId,
+      platform: job.platform,
+      taskId: task.startedAt,
+      kind: task.kind,
+    }))
+    job.activities.push(...activities)
+    task.activity = [...(task.activity || []), ...activities].slice(-200)
+  }
+  async saveTask(task, changes = {}) {
+    const pending = this.jobs.get(`${task.accountId}:${task.kind}`).activities
+    const count = pending.length
+    const result = await this.save({
+      ...changes,
+      tasks: { [`${task.accountId}:${task.kind}`]: task },
+      ...(count ? { activities: pending.slice(0, count) } : {}),
+    })
+    pending.splice(0, count)
+    return result
   }
   launch(job, task, operation) {
     // The IPC returns once started; report failures from the detached task too.
@@ -115,38 +205,57 @@ export class InviteRunner {
         this.log(task, task.current, error.response)
       })
       .finally(async () => {
+        job.stopped = true
         try {
-          await this.onTaskState(task.accountId, false)
+          await this.syncTaskState(task.accountId)
         } catch (error) {
           this.log(task, `停止任务失败：${error.message}`)
         }
-        this.jobs.delete(task.accountId)
-        this.emit()
+        this.jobs.delete(`${task.accountId}:${task.kind}`)
+        // Publish completion once, after releasing this kind. This also wakes
+        // update installation waiting on jobs and exposes the final task if its
+        // last persistence failed. Per-batch/record progress is emitted earlier.
+        this.emit(
+          task,
+          ...(task.kind === 'collect' ? ['talents', 'collections'] : ['records'])
+        )
       })
   }
+  // Register native busy state and persist the task before launching detached work.
+  // Failure releases this kind while retaining the other kind's native busy state.
   async saveStart(task) {
+    const job = this.jobs.get(`${task.accountId}:${task.kind}`)
     try {
-      await this.onTaskState(task.accountId, true)
-      if (this.jobs.get(task.accountId).stopped)
-        await this.onTaskState(task.accountId, false)
-      await this.save()
+      await this.syncTaskState(task.accountId)
+      if (job.stopped) await this.syncTaskState(task.accountId)
+      await this.saveTask(task)
     } catch (error) {
       task.status = 'stopped'
       task.current = `任务保存失败：${error.message}`
       this.log(task, task.current)
-      await this.onTaskState(task.accountId, false)
-      this.jobs.delete(task.accountId)
+      job.stopped = true
+      try {
+        await this.syncTaskState(task.accountId)
+      } catch (releaseError) {
+        this.log(task, `停止任务失败：${releaseError.message}`)
+      } finally {
+        // Native cleanup failure must not retain an unlaunched local job forever.
+        this.jobs.delete(`${task.accountId}:${task.kind}`)
+        this.emit(task)
+      }
       error.logged = true
       throw error
     }
   }
-  async stop(id) {
-    const job = this.jobs.get(id)
-    if (job) {
-      job.stopped = true
-      job.wake?.()
+  async stop(accountId, kind) {
+    for (const target of kind ? [kind] : ['collect', 'invite']) {
+      const job = this.jobs.get(`${accountId}:${target}`)
+      if (job) {
+        job.stopped = true
+        job.wake?.()
+      }
     }
-    await this.onTaskState(id, false)
+    await this.syncTaskState(accountId)
   }
   createJob(accountId, platform, kind, current, total = 0) {
     const task = {
@@ -165,16 +274,22 @@ export class InviteRunner {
       current,
       filters: { keyword: '', category: 'all', fans: 'all', level: 'all' },
     }
-    const job = { platform, stopped: false, wake: null, promise: null }
-    this.jobs.set(accountId, job)
-    this.data.tasks[accountId] = task
+    const job = { accountId, kind, platform, stopped: false, wake: null, promise: null, activities: [] }
+    this.jobs.set(`${accountId}:${kind}`, job)
+    this.data.tasks[`${accountId}:${kind}`] = task
     return { task, job }
   }
   async collect(accountId) {
-    if (this.jobs.has(accountId)) throw Error('该账号已有任务正在运行')
-    const { platform, api, capture } = this.getConnection(accountId)
-    if (!capture.search) throw Error('请先在平台网页搜索或应用筛选')
-    const snapshot = structuredClone(capture)
+    if (this.jobs.has(`${accountId}:collect`)) throw Error('该账号已有采集任务正在运行')
+    const { platform, url, api, capture } = this.getConnection(accountId, 'collect')
+    if (!isSupportedCollectionPage(platform, url))
+      throw Error('当前页面不支持采集')
+    if (!capture.list) throw Error('请先在当前平台页面搜索或应用筛选')
+    // Responses can contain a full page of profiles. Collection only reads that
+    // object; copy mutable request parameters without duplicating its large body.
+    const snapshot = {
+      list: { ...capture.list, body: structuredClone(capture.list.body) },
+    }
     const { task, job } = this.createJob(
       accountId,
       platform,
@@ -182,11 +297,16 @@ export class InviteRunner {
       '正在采集达人'
     )
     task.filters.keyword =
-      snapshot.search.body.ext?.keyword ||
-      snapshot.search.body.filters?.keyword ||
+      snapshot.list.body?.ext?.keyword ||
+      snapshot.list.body?.filters?.keyword ||
+      snapshot.list.body?.query ||
+      snapshot.list.body?.sugWord ||
       ''
+    this.activity(task, [
+      { time: task.startedAt, level: 'info', message: '开始采集达人' },
+    ])
     await this.saveStart(task)
-    this.emit()
+    this.emit(task)
     this.launch(job, task, () =>
       this.runCollection(accountId, platform, api, snapshot, task, job)
     )
@@ -207,33 +327,28 @@ export class InviteRunner {
         request,
         stopped: () => job.stopped,
         progress: async (count, text, batch) => {
-          const stored = new Map(
-            this.data.talents.map((t) => [`${t.platform}:${t.id}`, t])
-          )
           const collectedAt = new Date().toISOString()
-          let added = 0
-          for (const candidate of batch) {
-            const talent = {
-              ...candidate,
-              platform,
-              sourceAccountId: accountId,
-              collectedAt,
-            }
-            const existing = stored.get(`${platform}:${candidate.id}`)
-            if (existing) Object.assign(existing, talent)
-            else {
-              added++
-              this.data.talents.push(talent)
-              stored.set(`${platform}:${candidate.id}`, talent)
-            }
-          }
-          if (count && !collection.count) this.data.collections.push(collection)
           collection.count = count
           task.collected = count
           task.total = count
-          task.current = `${text} · 新增 ${added} · 已有 ${batch.length - added}`
-          await this.save()
-          this.emit()
+          const saved = await this.saveTask(task, {
+            talents: batch.map((candidate) => ({
+              ...candidate, platform, sourceAccountId: accountId, collectedAt,
+            })),
+            collections: [collection],
+          })
+          const updated = new Set(saved.updatedIds)
+          task.current = `${text} · 新增 ${saved.added} · 已有 ${batch.length - saved.added}`
+          this.activity(task, [
+            ...saved.talents.map((talent) => ({
+              time: collectedAt,
+              level: 'success',
+              message: `${talent.name} · ${updated.has(talent.id) ? '更新' : '新增'}`,
+            })),
+            { time: collectedAt, level: 'info', message: task.current },
+          ])
+          await this.saveTask(task)
+          this.emit(task, 'talents', 'collections')
         },
       })
       task.status = job.stopped ? 'stopped' : 'done'
@@ -246,42 +361,74 @@ export class InviteRunner {
       if (!(job.stopped && error.beforeSend))
         this.log(task, `采集失败：${error.message}`, error.response)
     }
-    await this.save()
-    this.emit()
+    this.activity(task, [
+      {
+        time: new Date().toISOString(),
+        level: task.status === 'done' ? 'success' : 'info',
+        message:
+          task.status === 'done'
+            ? task.current
+            : `采集已停止，共 ${task.collected} 位达人`,
+      },
+    ])
+    await this.saveTask(task)
   }
   async start(accountId, config, talentIds) {
-    if (this.jobs.has(accountId)) throw Error('该账号已有任务正在运行')
-    const { platform, api } = this.getConnection(accountId)
+    if (this.jobs.has(`${accountId}:invite`)) throw Error('该账号已有邀约任务正在运行')
+    const { platform, api } = this.getConnection(accountId, 'invite')
     validateConfig(platform, config)
-    const selected = new Set(talentIds)
-    if (!selected.size) throw Error('请先从采集列表选择达人')
-    const queue = this.data.talents.filter(
-      (t) => t.platform === platform && selected.has(t.id)
-    )
-    if (queue.length !== selected.size)
-      throw Error('所选达人不在该平台的采集列表中')
-    const snapshot = structuredClone(queue)
+    const selected = [...new Set(talentIds)]
+    if (!selected.length) throw Error('请先从采集列表选择达人')
+    const available = await this.query({ kind: 'talent_ids', platform, accountId, ids: selected })
+    if (available.length !== selected.length)
+      throw Error('所选达人不在当前账号的采集列表中')
+    const snapshot = await this.query({ kind: 'invite_ids', platform, accountId, ids: available })
+    if (!snapshot.length) throw Error('没有无邀约记录的达人')
+    if (this.jobs.has(`${accountId}:invite`)) throw Error('该账号已有邀约任务正在运行')
     const configSnapshot = structuredClone(config)
     const { task, job } = this.createJob(
       accountId,
       platform,
       'invite',
-      '读取邀约额度',
+      '正在准备邀约',
       snapshot.length
     )
     await this.saveStart(task)
-    this.emit()
+    this.emit(task)
     this.launch(job, task, () =>
       this.run(accountId, platform, configSnapshot, api, snapshot, task, job)
     )
   }
+  async *candidates(accountId, platform, ids, job) {
+    for (let offset = 0; offset < ids.length && !job.stopped; offset += 200) {
+      const batch = ids.slice(offset, offset + 200)
+      const [talents, records] = await Promise.all([
+        this.query({ kind: 'talent_batch', platform, accountId, ids: batch }),
+        this.query({ kind: 'history', platform, accountId, ids: batch }),
+      ])
+      const history = new Map()
+      for (const record of records) {
+        const prior = history.get(record.talentId)
+        if (prior) prior.push(record)
+        else history.set(record.talentId, [record])
+      }
+      for (const candidate of talents) {
+        if (job.stopped) return
+        yield { candidate, history: history.get(candidate.id) || [] }
+      }
+    }
+  }
   async run(accountId, platform, config, api, queue, task, job) {
-    const request = pacedRequest(api, config.interval, job)
+    const request = (path, body = null, onResponse) => {
+      if (job.stopped) throw Object.assign(Error('已停止'), { beforeSend: true })
+      return api(path, body, undefined, onResponse)
+    }
+    let nextSendAt = 0
     const maxInvites = config.maxInvites ?? Infinity
     try {
-      let quota = await readQuota(request, platform)
-      this.onQuota(accountId, quota)
-      if (quota.remaining === 0) throw Error('邀约额度已用完')
+      const contact = platform === 'kuaishou'
+        ? (await request('/distribute/pc/seller/invite/contact?inviteType=1')).data
+        : undefined
       const tags =
         platform === 'kuaishou'
           ? (
@@ -290,15 +437,31 @@ export class InviteRunner {
               .filter((t) => t.selected === 1)
               .slice(0, 5)
           : []
-      for (const candidate of queue) {
-        if (job.stopped || task.success >= maxInvites || quota.remaining === 0)
+      for await (const { candidate, history } of this.candidates(accountId, platform, queue, job)) {
+        if (job.stopped || task.success >= maxInvites)
           break
+        if (
+          alreadyHandled(
+            history, accountId, platform, candidate.id
+          )
+        ) {
+          task.skipped++
+          task.processed++
+          // Long already-handled queues must give the UI a turn to render and
+          // accept Stop, without copying history or emitting once per skipped row.
+          if (task.processed % 100 === 0) {
+            this.emit(task)
+            await new Promise((resolve) => setTimeout(resolve, 0))
+          }
+          continue
+        }
         task.current = candidate.name
         const record = {
           id: crypto.randomUUID(),
           accountId,
           platform,
           talentId: candidate.id,
+          talentUid: candidate.uid,
           name: candidate.name,
           time: new Date().toISOString(),
           status: 'skipped',
@@ -307,58 +470,90 @@ export class InviteRunner {
           message: config.message,
           note: '',
         }
-        if (
-          alreadyHandled(this.data.records, accountId, platform, candidate.id)
-        ) {
-          task.skipped++
-          task.processed++
-          this.emit()
-          continue
-        }
         let sending = false
+        let savedSending = false
+        let retryResponse
+        const candidateRequest = (path, body = null) =>
+          request(path, body, (response) => { record.response = response })
         try {
           const invitation = await prepareInvite(
-            request,
+            candidateRequest,
             platform,
             config,
             candidate,
-            quota,
+            contact,
             tags
           )
           if (invitation.skip) {
             record.note = invitation.skip
-            this.data.records.unshift(record)
             task.skipped++
           } else {
-            if (job.stopped) break
-            record.status = 'sending'
-            this.data.records.unshift(record)
-            await this.save()
-            this.emit()
-            sending = true
-            await request(invitation.path, invitation.body)
+            while (true) {
+              await waitUntil(nextSendAt, job)
+              // Commit the same sending row before every dispatch. A process exit
+              // leaves one reviewable record, never a success or a duplicate row.
+              delete record.response
+              record.note = ''
+              record.status = 'sending'
+              await this.saveTask(task, { records: [record] })
+              savedSending = true
+              if (job.stopped)
+                throw Object.assign(Error('已停止'), { beforeSend: true })
+              task.current = candidate.name
+              this.emit(task, 'records')
+              sending = true
+              nextSendAt = Date.now() + config.interval
+              try {
+                await candidateRequest(invitation.path, invitation.body)
+                break
+              } catch (error) {
+                if (
+                  platform !== 'kuaishou' ||
+                  error.beforeSend ||
+                  error.response?.path !== '/distribute/pc/seller/invite/seller/create' ||
+                  error.response.code !== 400010
+                ) throw error
+                // This observed risk-control response is the only automatic retry.
+                // Preserve its response while waiting; Stop cancels waitUntil.
+                retryResponse = error.response
+                record.response = retryResponse
+                record.note = error.message
+                task.current = '快手风控，等待后重试'
+                nextSendAt = Math.max(nextSendAt, Date.now() + 5000)
+                await this.saveTask(task, { records: [record] })
+                this.log(
+                  task,
+                  `${candidate.name}（${candidate.id}）· 风控：${error.message}，等待后重试`,
+                  error.response
+                )
+              }
+            }
             record.status = 'success'
             task.success++
-            quota.remaining--
             task.processed++
-            await this.save()
-            this.emit()
-            this.onQuota(accountId, quota)
-            if (platform === 'douyin') {
-              quota = await readQuota(request, platform)
-              this.onQuota(accountId, quota)
-            }
+            await this.saveTask(task, { records: [record] })
+            this.emit(task, 'records')
+            // Stop the generator before it loads another 200-row batch/history.
+            if (task.success >= maxInvites) break
             continue
           }
         } catch (error) {
           if (record.status === 'success') throw error
           if (error.beforeSend) {
-            if (sending)
-              this.data.records.splice(this.data.records.indexOf(record), 1)
+            if (savedSending) {
+              if (retryResponse) {
+                record.status = 'review'
+                record.note = `${error.message}，请核实上次邀约结果`
+                record.response = retryResponse
+                task.review++
+                task.processed++
+                await this.saveTask(task, { records: [record] })
+              } else {
+                await this.saveTask(task, { deleteRecordIds: [record.id] })
+              }
+            }
             throw error
           }
-          if (!sending && !this.data.records.includes(record))
-            this.data.records.unshift(record)
           if (
             platform === 'kuaishou' &&
             /近7天有未处理|近7天.*被拒绝/.test(error.message)
@@ -367,6 +562,8 @@ export class InviteRunner {
             record.recentInvite = true
             task.skipped++
           } else {
+            // Only a confirmed rejection makes a dispatched send a known failure.
+            // Transport/page loss remains uncertain and stops the queue instead of retrying.
             record.status = sending && !error.rejected ? 'review' : 'failed'
             task[record.status]++
             job.stopped = true
@@ -381,8 +578,8 @@ export class InviteRunner {
             )
         }
         task.processed++
-        await this.save()
-        this.emit()
+        await this.saveTask(task, { records: [record] })
+        this.emit(task, 'records')
       }
       task.status = job.stopped ? 'stopped' : 'done'
       task.current = job.stopped
@@ -391,10 +588,10 @@ export class InviteRunner {
           : task.failed
             ? '邀约失败，已停止'
             : '已停止'
-        : quota.remaining === 0
-          ? '额度已用完'
-          : task.success >= maxInvites
-            ? '已达到本次邀约上限'
+        : task.success >= maxInvites
+          ? '已达到本次邀约上限'
+          : task.review
+            ? '本次处理完成，存在待核实记录'
             : '本次邀约已完成'
     } catch (error) {
       task.status = 'stopped'
@@ -402,7 +599,6 @@ export class InviteRunner {
       if (!(job.stopped && error.beforeSend))
         this.log(task, `邀约中断：${error.message}`, error.response)
     }
-    await this.save()
-    this.emit()
+    await this.saveTask(task)
   }
 }

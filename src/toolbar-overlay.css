@@ -1,3 +1,12 @@
+/**
+ * AI module map
+ * Purpose: keep the toolbar child WebView visually transparent and non-scrollable.
+ * Entry: imported after global styles by toolbar-overlay.tsx.
+ * Flow: root/body transparency exposes the merchant page outside the floating controls;
+ * the React entry reports content/menu height to toolbar.rs.
+ * Invariant: do not turn this into the main application's background or scroll policy.
+ */
+
 html,
 body {
   background: transparent;

@@ -1,6 +1,23 @@
+/**
+ * AI module map
+ * Purpose: collect invitation settings for the current collection account before a job.
+ * Entry: InviteCompose is a controlled sheet opened by InvitePage with selected talent IDs.
+ * Flow: load/edit account configuration, observe guest readiness, persist settings, then
+ * call desktop.start or the preview simulator only after the user's start action.
+ * State: the fixed sending account and open state are parent-owned; config/busy/error is local.
+ * The task subscription selects invitation progress only; concurrent collection remains
+ * independent. Logs and saved filters
+ * do not redraw the form, and completed task snapshots do not render here.
+ * Invariants: maxInvites is optional and null means unlimited by user choice. The send
+ * response decides platform limits; cached quota never gates this form. Login/readiness
+ * and in-progress controls must reflect the selected sender; changing the form must
+ * not mutate an already-started job snapshot. Invitation intervals start at 2000 ms
+ * for Kuaishou and 500 ms for Douyin; the workspace applies this floor when opening.
+ */
+
 import { useState } from 'react'
-import { LogIn, Play, RotateCw, Square } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
+import { useShallow } from 'zustand/react/shallow'
+import { LogIn, Play, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -16,7 +33,6 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { browserError, retryGuest, useGuestState } from './browser-session'
 import { desktop } from './desktop'
-import { Choice } from './shared'
 import { defaults, startDemo, stopDemo, useCommerce } from './store'
 import type { Platform, InviteConfig } from './types'
 
@@ -25,7 +41,6 @@ export function InviteCompose({
   onOpenChange,
   platform,
   accountId,
-  onAccountChange,
   selectedIds,
   onLogin,
   onStarted,
@@ -34,24 +49,29 @@ export function InviteCompose({
   onOpenChange: (open: boolean) => void
   platform: Platform
   accountId: string
-  onAccountChange: (id: string) => void
   selectedIds: string[]
   onLogin: (id: string) => void
   onStarted: () => void
 }) {
-  const store = useCommerce()
-  const account = store.accounts.find((a) => a.id === accountId)
-  const available = store.accounts.filter((a) => a.platform === platform)
-  const config = store.configs[accountId] || defaults
+  const account = useCommerce((s) => s.accounts.find((a) => a.id === accountId))
+  const config = useCommerce((s) => s.configs[accountId] || defaults)
+  const minimumInterval = platform === 'kuaishou' ? 2000 : 500
+  const saveConfig = useCommerce((s) => s.saveConfig)
   const pageState = useGuestState((s) => s.sessions[accountId])
   const pageReady = !desktop || pageState?.status === 'ready'
-  const task = store.tasks[accountId]
-  const running = task?.status === 'running'
+  const task = useCommerce(useShallow((s) => {
+    const current = s.tasks[`${accountId}:invite`]
+    return current?.status === 'running' ? {
+      processed: current.processed,
+      total: current.total,
+      current: current.current,
+    } : undefined
+  }))
+  const running = Boolean(task)
   const [error, setError] = useState('')
   const [starting, setStarting] = useState(false)
-  const [refreshing, setRefreshing] = useState(false)
   const save = (partial: Partial<InviteConfig>) =>
-    store.saveConfig(accountId, { ...config, ...partial })
+    saveConfig(accountId, { ...config, ...partial })
   async function start() {
     if (!pageReady) return
     const ids = [
@@ -88,10 +108,10 @@ export function InviteCompose({
     }
     if (
       !Number.isInteger(config.interval) ||
-      config.interval < 500 ||
+      config.interval < minimumInterval ||
       config.interval > 60000
     ) {
-      setError('间隔为 500–60000 毫秒')
+      setError(`间隔为 ${minimumInterval}–60000 毫秒`)
       return
     }
     if (
@@ -114,21 +134,10 @@ export function InviteCompose({
       setStarting(false)
     }
   }
-  async function refreshQuota() {
-    setRefreshing(true)
-    setError('')
-    try {
-      if (desktop) await desktop.refreshAccount(accountId)
-    } catch (e) {
-      setError(browserError(e))
-    } finally {
-      setRefreshing(false)
-    }
-  }
   async function stop() {
     try {
-      if (desktop) await desktop.stop(accountId)
-      else stopDemo(accountId)
+      if (desktop) await desktop.stop(accountId, 'invite')
+      else stopDemo(accountId, 'invite')
     } catch (e) {
       setError(browserError(e))
     }
@@ -137,76 +146,27 @@ export function InviteCompose({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className='gap-0 sm:max-w-[460px]'>
         <SheetHeader className='border-b p-6'>
-          <SheetTitle>
-            邀约达人{' '}
-            <Badge variant='secondary' className='ml-2'>
-              {selectedIds.length} 位
-            </Badge>
+          <SheetTitle className='flex flex-wrap items-center gap-3 pr-4'>
+            邀约达人
           </SheetTitle>
           <SheetDescription className='sr-only'>
-            选择发送账号并填写邀约内容
+            填写邀约内容
           </SheetDescription>
         </SheetHeader>
         <div className='min-h-0 flex-1 space-y-5 overflow-y-auto p-6'>
-          <div className='space-y-2'>
-            <Label>发送账号</Label>
-            <Choice
-              label='发送账号'
-              disabled={starting}
-              value={accountId}
-              onChange={(id) => {
-                onAccountChange(id)
-                setError('')
-              }}
-              options={available.map((a) => ({ value: a.id, label: a.name }))}
-              className='w-full'
-            />
-            {account && (
-              <div className='flex items-center justify-between gap-2 pt-1 text-sm'>
-                <span
-                  className={
-                    account.status === 'online'
-                      ? 'text-emerald-700'
-                      : 'text-amber-700'
-                  }
-                >
-                  {account.status === 'online' ? '已登录' : '需要登录'}
-                </span>
-                {account.status === 'online' ? (
-                  <span className='text-muted-foreground'>
-                    {account.quotaError
-                      ? '额度待刷新'
-                      : `剩余 ${account.quota} 次`}
-                  </span>
-                ) : (
-                  <Button
-                    size='sm'
-                    variant='outline'
-                    onClick={() => onLogin(account.id)}
-                  >
-                    <LogIn />
-                    登录账号
-                  </Button>
-                )}
-              </div>
-            )}
-            {account?.quotaError && (
-              <div className='space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3'>
-                <p role='alert' className='text-sm break-words text-amber-900'>
-                  额度读取失败：{account.quotaError}
-                </p>
-                <Button
-                  variant='outline'
-                  size='sm'
-                  disabled={refreshing}
-                  onClick={refreshQuota}
-                >
-                  <RotateCw className={refreshing ? 'animate-spin' : ''} />
-                  {refreshing ? '正在刷新' : '刷新额度'}
-                </Button>
-              </div>
-            )}
-          </div>
+          {account && account.status !== 'online' && (
+            <div className='flex items-center justify-between gap-2 pt-1 text-sm'>
+              <span className='text-amber-700'>需要登录</span>
+              <Button
+                size='sm'
+                variant='outline'
+                onClick={() => onLogin(account.id)}
+              >
+                <LogIn />
+                登录账号
+              </Button>
+            </div>
+          )}
           {desktop && pageState?.status === 'error' && (
             <div className='space-y-2'>
               <p role='alert' className='text-sm text-destructive'>
@@ -297,11 +257,11 @@ export function InviteCompose({
               />
             </div>
             <div className='space-y-2'>
-              <Label htmlFor='invite-interval'>间隔（毫秒）</Label>
+              <Label htmlFor='invite-interval'>邀约间隔（毫秒）</Label>
               <Input
                 id='invite-interval'
                 type='number'
-                min={500}
+                min={minimumInterval}
                 max={60000}
                 value={config.interval}
                 disabled={running || starting}
@@ -309,18 +269,10 @@ export function InviteCompose({
               />
             </div>
           </div>
-          {task && running && (
+          {task && (
             <div className='space-y-3 rounded-lg border p-4'>
               <div className='flex justify-between text-sm'>
-                <span>
-                  {running
-                    ? task.kind === 'collect'
-                      ? '正在采集'
-                      : '正在邀约'
-                    : task.status === 'done'
-                      ? '上次任务已完成'
-                      : '上次任务已停止'}
-                </span>
+                <span>正在邀约</span>
                 <span className='tabular-nums'>
                   {task.processed} / {task.total}
                 </span>
@@ -346,8 +298,6 @@ export function InviteCompose({
               (!pageReady ||
                 !account ||
                 account.status !== 'online' ||
-                Boolean(account.quotaError) ||
-                account.quota === 0 ||
                 starting ||
                 !selectedIds.length)
             }
@@ -359,7 +309,7 @@ export function InviteCompose({
               <Play className='size-4 fill-current' />
             )}
             {running
-              ? '停止当前任务'
+              ? '停止邀约'
               : starting
                 ? '正在启动'
                 : !pageReady
@@ -368,11 +318,7 @@ export function InviteCompose({
                     : '正在加载网页'
                   : account?.status !== 'online'
                     ? '请先登录账号'
-                    : account.quotaError
-                      ? '刷新额度后重试'
-                      : account.quota === 0
-                        ? '额度已用完'
-                        : `开始邀约 ${Math.min(selectedIds.length, config.maxInvites ?? selectedIds.length)} 位`}
+                    : `开始邀约 ${Math.min(selectedIds.length, config.maxInvites ?? selectedIds.length)} 位`}
           </Button>
         </SheetFooter>
       </SheetContent>

@@ -1,3 +1,12 @@
+/**
+ * AI module map
+ * Purpose: compose accessible select inputs, portaled choices, and scrolling controls.
+ * Entry: Select root/value/trigger/content/items and group/label/scroll helpers.
+ * Flow: Radix manages selection and focus; trigger size and popper dimensions style the UI.
+ * Invariant: caller values and callbacks define meaning; keep select-content data slots
+ * stable for native covering-layer detection in commerce/browser.tsx.
+ */
+
 import * as React from 'react'
 import * as SelectPrimitive from '@radix-ui/react-select'
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from 'lucide-react'

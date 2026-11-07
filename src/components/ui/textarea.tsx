@@ -1,3 +1,11 @@
+/**
+ * AI module map
+ * Purpose: style native multiline text inputs with shared focus/error/disabled states.
+ * Entry: Textarea forwards native attributes, text value, and events.
+ * Flow: callers control validation, length limits, and persistence for the entered text.
+ * Invariant: no platform message rules or invitation side effects belong in this wrapper.
+ */
+
 import * as React from 'react'
 import { cn } from '@/lib/utils'
 
