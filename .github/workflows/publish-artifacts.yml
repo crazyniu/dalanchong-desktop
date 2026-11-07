@@ -29,7 +29,7 @@ concurrency:
 jobs:
   publish:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     defaults:
       run:
         shell: bash
