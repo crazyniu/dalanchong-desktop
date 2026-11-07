@@ -12,7 +12,7 @@
 
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { openAsBlob } from 'node:fs'
+import { createReadStream, openAsBlob } from 'node:fs'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -77,17 +77,23 @@ async function gitee(endpoint, { method = 'GET', json, form } = {}) {
 
 async function verifyAttachment(attachment, asset) {
   const url = attachmentUrl(asset.name, [attachment])
-  const response = await fetch(url)
-  if (!response.ok)
-    throw Error(`附件 ${asset.name} 无法匿名下载：HTTP ${response.status}`)
-  const hash = createHash('sha512')
-  let size = 0
-  for await (const chunk of response.body) {
-    size += chunk.length
-    hash.update(chunk)
+  const download = asset.file + '.download'
+  try {
+    execFileSync('curl', [
+      '--fail', '--location', '--show-error', '--connect-timeout', '30',
+      '--max-time', '180', '--output', download, url,
+    ], { stdio: ['ignore', 'ignore', 'inherit'] })
+    const hash = createHash('sha512')
+    let size = 0
+    for await (const chunk of createReadStream(download)) {
+      size += chunk.length
+      hash.update(chunk)
+    }
+    if (size !== asset.size || hash.digest('base64') !== asset.sha512)
+      throw Error(`Gitee 附件 ${asset.name} 的匿名下载哈希不匹配，不更新 latest`)
+  } finally {
+    await rm(download, { force: true })
   }
-  if (size !== asset.size || hash.digest('base64') !== asset.sha512)
-    throw Error(`Gitee 附件 ${asset.name} 的匿名下载哈希不匹配，不更新 latest`)
 }
 
 export async function verifyPublishAccess() {
@@ -215,7 +221,9 @@ export async function publishRelease({
       '--clobber',
       ...assets.map((a) => a.file)
     )
-    const lookup = await fetch(`${API}/releases/tags/${encodeURIComponent(tag)}`)
+    const lookupUrl = new URL(`${API}/releases/tags/${encodeURIComponent(tag)}`)
+    lookupUrl.searchParams.set('access_token', process.env.GITEE_TOKEN)
+    const lookup = await fetch(lookupUrl)
     if (!lookup.ok && lookup.status !== 404)
       throw Error(`Gitee 读取 ${tag} 失败：HTTP ${lookup.status}`)
     const created = lookup.ok
