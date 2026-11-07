@@ -167,7 +167,9 @@ export async function publishRelease({
       git('commit', '-m', 'Initialize release distribution')
       git('push', 'origin', 'main')
     }
-    const assets = release.targets.flatMap((t) => t.assets)
+    const assets = release.targets.flatMap((t) => t.assets).sort(
+      (a, b) => Number(b.name.endsWith('.exe')) - Number(a.name.endsWith('.exe'))
+    )
     let existing
     try {
       existing = JSON.parse(
@@ -203,6 +205,7 @@ export async function publishRelease({
         '--notes-file',
         release.notesFile
       )
+    console.log('正在上传 GitHub Release 附件')
     gh(
       'release',
       'upload',
@@ -212,25 +215,35 @@ export async function publishRelease({
       '--clobber',
       ...assets.map((a) => a.file)
     )
-    const created = await gitee('/releases', {
-      method: 'POST',
-      json: {
-        tag_name: tag,
-        name: `大懒虫 ${release.version}`,
-        body: release.notes,
-        target_commitish: 'main',
-        prerelease: false,
-      },
-    })
+    const lookup = await fetch(`${API}/releases/tags/${encodeURIComponent(tag)}`)
+    if (!lookup.ok && lookup.status !== 404)
+      throw Error(`Gitee 读取 ${tag} 失败：HTTP ${lookup.status}`)
+    const created = lookup.ok
+      ? await lookup.json()
+      : await gitee('/releases', {
+          method: 'POST',
+          json: {
+            tag_name: tag,
+            name: `大懒虫 ${release.version}`,
+            body: release.notes,
+            target_commitish: 'main',
+            prerelease: false,
+          },
+        })
     const attachments = []
     for (const asset of assets) {
-      const form = new FormData()
-      form.set('access_token', process.env.GITEE_TOKEN)
-      form.set('file', await openAsBlob(asset.file), asset.name)
-      const attachment = await gitee(`/releases/${created.id}/attach_files`, {
-        method: 'POST',
-        form,
-      })
+      let attachment = created.assets.find((item) => item.name === asset.name)
+      if (!attachment) {
+        console.log(`正在上传 Gitee 附件：${asset.name}（${asset.size} 字节）`)
+        const form = new FormData()
+        form.set('access_token', process.env.GITEE_TOKEN)
+        form.set('file', await openAsBlob(asset.file), asset.name)
+        attachment = await gitee(`/releases/${created.id}/attach_files`, {
+          method: 'POST',
+          form,
+        })
+      }
+      console.log(`正在核对 Gitee 下载：${asset.name}`)
       await verifyAttachment(attachment, asset)
       attachments.push(attachment)
       console.log(`Gitee 附件已核验：${asset.name}`)
