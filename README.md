@@ -36,7 +36,7 @@
 sh ./run.sh
 ```
 
-脚本自动安装依赖并启动 Tauri/Vite。需要 Node 24、pnpm 11、Rust 1.94+；macOS 还需 Xcode Command Line Tools。macOS 最低 14，Windows 使用系统 WebView2。相对本仓库，日常数据目录为 `../.local/ecommerce-assistant/`，可通过 `ASSISTANT_TEST_DATA` 指定隔离目录；未指定时会使用真实本机账号数据。
+脚本自动安装依赖并启动 Tauri/Vite。需要 Node 24、pnpm 11、Rust 1.94+；macOS 还需 Xcode Command Line Tools。Mac 支持 Apple 芯片 arm64，macOS 最低 14；Windows 支持 x64，使用系统 WebView2。相对本仓库，日常数据目录为 `../.local/ecommerce-assistant/`，可通过 `ASSISTANT_TEST_DATA` 指定隔离目录；未指定时会使用真实本机账号数据。
 
 只预览 Web 界面：
 
@@ -153,10 +153,10 @@ Google Chrome 使用本机安装位置，浏览器版本由 Chrome 自身更新�
 | `pnpm build` | TypeScript 检查与前端构建 |
 | `pnpm test:core`、`pnpm test:scripts` | 现有核心任务与脚本测试 |
 | `pnpm test:native` | Rust `cargo check`，不代表真实平台验收 |
-| `pnpm package:mac` | 在 macOS 打包当前架构 |
+| `pnpm package:mac` | 在 Apple 芯片 Mac 打包 arm64 |
 | `pnpm package:win` | 在 Windows x64 打包 |
 
-Tauri 产物位于 `dist-release/tauri/<platform>/<arch>/`。Mac 提供 DMG 和签名 app.tar.gz 更新包，Windows 提供 NSIS EXE。测试包与正式公证发布的区别见发布说明。
+Tauri 产物位于 `dist-release/tauri/<platform>/<arch>/`。Mac arm64 提供 DMG 和签名 app.tar.gz 更新包，Windows x64 提供 NSIS EXE。测试包与正式公证发布的区别见发布说明。
 
 图标及导出方法见 [应用图标](assets/icons/README.md)：白底小虫、Mac ICNS、Windows 多尺寸 ICO，已接入窗口、Dock、网页和打包配置。通用激活码后台继续使用自己的名称和钥匙图标。
 

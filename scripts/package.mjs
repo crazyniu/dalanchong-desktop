@@ -20,7 +20,6 @@ const platform = process.argv[2] || process.platform
 const arch = process.argv[3] || process.arch
 const triples = {
   'darwin/arm64': 'aarch64-apple-darwin',
-  'darwin/x64': 'x86_64-apple-darwin',
   'win32/x64': 'x86_64-pc-windows-msvc',
 }
 const target = triples[`${platform}/${arch}`]

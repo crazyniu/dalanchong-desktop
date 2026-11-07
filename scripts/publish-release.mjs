@@ -120,7 +120,7 @@ export async function publishRelease({
   check = false,
   requestedTargets,
 }) {
-  // All three targets and every attachment are checked before any remote mutation.
+  // All supported targets and every attachment are checked before any remote mutation.
   const release = await prepareRelease({ tag, artifacts, requestedTargets })
   if (check) {
     console.log(`${tag} 全量发布预检通过，未发布`)

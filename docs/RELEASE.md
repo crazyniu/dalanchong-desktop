@@ -11,7 +11,7 @@
 ## 本地运行与打包
 
 - `./run.sh`：安装依赖并启动 Tauri 开发版；需要 Node 24、pnpm 11、Rust 1.94+，macOS 还需 Xcode Command Line Tools。
-- `pnpm package:mac`：当前 Mac 架构的原生 app、DMG、签名更新压缩包。
+- `pnpm package:mac`：Apple 芯片 Mac arm64 的原生 app、DMG、签名更新压缩包。
 - `pnpm package:win`：在 Windows x64 生成 NSIS 安装包及更新签名。
 - 产物在 `dist-release/tauri/<系统>/<架构>/`。
 
@@ -31,13 +31,13 @@ Mac 正式发布必须 Developer ID 签名并公证，需要 APPLE_SIGNING_IDENT
 
 在 `Tauri Release to Gitee` 工作流中选择已提交工作流的分支，填写与源码版本一致的 `tag` 标识（例如 `v0.3.2`），将 `source_ref` 填为要打包的固定提交 SHA，并保持 `publish=false`。该模式从 `source_ref` 检出源码，`tag` 仅用于版本一致性检查，无需创建或推送版本标签；省略 `source_ref` 时按已有 `tag` 检出。
 
-工作流生成 Mac arm64、Mac x64 和 Windows x64 安装包，从运行页面的 Artifacts 下载对应 `release-darwin-arm64`、`release-darwin-x64` 或 `release-win32-x64`。仅打包时不导入 Apple 发布证书、不公证，也不发布 Release 或更新 `latest.json`；Mac 包须按未公证包交付。正式版本标签触发或 `publish=true` 仍使用原有签名、公证和发布流程，`source_ref` 不参与正式发布。
+工作流仅生成 Apple 芯片 Mac arm64 和 Windows x64 安装包，从运行页面的 Artifacts 下载对应 `release-darwin-arm64` 或 `release-win32-x64`。仅打包时不导入 Apple 发布证书、不公证，也不发布 Release 或更新 `latest.json`；Mac 包须按未公证包交付。正式版本标签触发或 `publish=true` 仍使用原有签名、公证和发布流程，`source_ref` 不参与正式发布。
 
 ## 发布流程
 
 1. `pnpm release:prepare --tag v<version>` 检查中文说明及版本。
-2. 分别构建 Mac arm64、Mac x64、Windows x64。
-3. `pnpm release:publish --tag v<version> --artifacts dist-release/tauri --check` 检查三平台文件、大小、哈希和签名文件一致性。
+2. 分别构建 Apple 芯片 Mac arm64 和 Windows x64。
+3. `pnpm release:publish --tag v<version> --artifacts dist-release/tauri --check` 检查 Mac arm64 和 Windows x64 文件、大小、哈希和签名文件一致性。
 4. 在用户已要求发布的范围内执行发布命令或推版本 tag；仅要求打包时到产物交付为止。凭据来自 GH_TOKEN / GITEE_TOKEN，禁止输出。
 5. 先上传所有附件并匿名验证下载哈希，再一次性提交 `updates/tauri/latest.json`。元数据包含版本、中文说明、各平台下载地址及 Tauri 签名。
 
@@ -51,4 +51,4 @@ Mac 正式发布必须 Developer ID 签名并公证，需要 APPLE_SIGNING_IDENT
 
 ## 单平台线上测试
 
-用户要求测试在线下载时，手动运行 `publish-local-test.yml`，输入已有版本 tag 和用于检测的旧版本号。该流程只在 Windows x64 构建 NSIS 安装包并生成固定 Tauri 更新签名，以 `--targets win32/x64` 校验并发布 Gitee，公开下载核验后才更新 Tauri latest.json。随后在同一 Windows runner 调用 App 原生更新模块检测、下载并验签一次，保存 result.json，不执行安装或重启。Release 正文注明未提供 Windows 代码签名及支持范围。完整发布仍检查三架构；不得把单平台测试写成三平台正式发布。
+用户要求测试在线下载时，手动运行 `publish-local-test.yml`，输入已有版本 tag 和用于检测的旧版本号。该流程只在 Windows x64 构建 NSIS 安装包并生成固定 Tauri 更新签名，以 `--targets win32/x64` 校验并发布 Gitee，公开下载核验后才更新 Tauri latest.json。随后在同一 Windows runner 调用 App 原生更新模块检测、下载并验签一次，保存 result.json，不执行安装或重启。Release 正文注明未提供 Windows 代码签名及支持范围。完整发布检查 Mac arm64 和 Windows x64；单平台测试结果仅代表该平台。

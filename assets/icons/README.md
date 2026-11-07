@@ -12,7 +12,7 @@
 
 侧栏使用 `public/brand-transparent.png`，直接复制透明底 `original.png`，保留原图透明通道。
 
-`src-tauri/tauri.conf.json` 配置 PNG、ICNS 和 ICO，供窗口与安装包使用。打包命令为 `pnpm package:mac` 和 `pnpm package:win`（Windows x64）。
+`src-tauri/tauri.conf.json` 配置 PNG、ICNS 和 ICO，供窗口与安装包使用。打包命令为 `pnpm package:mac`（Apple 芯片 Mac arm64）和 `pnpm package:win`（Windows x64）。
 
 这些图标原图与已导出文件均随源码保留，是界面和安装包的输入，不按 `dist/` 等构建缓存忽略或清理。打包、签名和交付目录见 [发布说明](../../docs/RELEASE.md)。
 

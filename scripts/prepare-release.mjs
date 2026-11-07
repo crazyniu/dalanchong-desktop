@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
 export const ROOT = path.resolve(import.meta.dirname, '..')
-export const TARGETS = ['darwin/arm64', 'darwin/x64', 'win32/x64']
+export const TARGETS = ['darwin/arm64', 'win32/x64']
 export const MAX_ASSET_SIZE = 100 * 1024 * 1024
 export function validateTag(version, tag) {
   if (!/^\d+\.\d+\.\d+$/.test(version) || tag !== `v${version}`)
@@ -50,11 +50,7 @@ export async function inspectArtifacts(
     )
     if (metadata.version !== version) throw Error(`${target} 版本不匹配`)
     const platformKey =
-      target === 'darwin/arm64'
-        ? 'darwin-aarch64'
-        : target === 'darwin/x64'
-          ? 'darwin-x86_64'
-          : 'windows-x86_64'
+      target === 'darwin/arm64' ? 'darwin-aarch64' : 'windows-x86_64'
     if (metadata.target !== platformKey) throw Error(`${target} 架构不匹配`)
     const required = target.startsWith('darwin/')
       ? ['.dmg', '.app.tar.gz']

@@ -101,6 +101,7 @@
 
 ## 版本与发布
 
+- 桌面支持与打包目标仅为 Windows x64 和 Mac Apple 芯片 arm64；macOS 最低版本为 14。
 - 发布前先读 `docs/RELEASE.md`。`package.json.version` 是唯一版本来源；侧栏编译版本、Rust 原生端版本、视频插件版本、Git tag `v<version>`、`release-notes/<version>.md` 必须一致。插件版本由 `scripts/sync-video-extension-version.mjs` 在开发启动、构建和打包资源准备时同步，不独立编号；发布时使用现有发布检查脚本校验发布输入。
 - 只有用户要求发布时才推版本 tag 或触发 Release 工作流；普通代码修改不自动打包、发布或更新用户软件。
 - 客户端从 Gitee 的 `updates/tauri/latest.json` 读取版本与中文更新说明；发布时将同一份说明写入该元数据及 Gitee、GitHub Release 正文。先上传所有安装包，再更新对应系统/架构的 latest 元数据；不得发布指向未上传附件的更新。

@@ -4,7 +4,7 @@
 
 ## Platform
 
-桌面应用：macOS 14+、Windows；Web 预览用于演示。
+桌面应用：Apple 芯片 Mac arm64（macOS 14+）、Windows x64；Web 预览用于演示。
 
 ## Stack
 
