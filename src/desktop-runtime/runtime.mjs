@@ -16,6 +16,7 @@
  * Runtime events contain changed domains only; task events carry one account/kind task.
  * Task maps use accountId:kind keys. Collection and invitation run independently;
  * API cancellation checks that kind while native page locks aggregate both jobs.
+ * Page errors stop collection; invitation requests retain their timed retry loop.
  * Subscribers share detached read-only snapshots. Replay merges domains and tasks so
  * late subscribers receive complete current data without changing other task references.
  * Initialization loads native data once; later UI hydration uses current replay and
@@ -368,8 +369,10 @@ export function createRuntime(
         if (event.workspace) {
           c.ready = false
           clearCapture(c)
+          // Invitation requests wait and retry when the page becomes available.
+          // Collection still depends on the current page capture and must stop.
           void runner
-            ?.stop(c.id)
+            ?.stop(c.id, 'collect')
             .catch((error) => report('停止任务失败', error, c.id))
         }
         report('平台网页异常', nativeError(event.error), c.id)

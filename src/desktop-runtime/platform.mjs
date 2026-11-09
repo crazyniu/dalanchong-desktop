@@ -5,7 +5,7 @@
  * captured page traffic; collect traverses candidates; prepareInvite builds one invitation.
  * Flow: serialized pageRequest runs in the authenticated account WebView, not Node or a
  * separate HTTP client. Results become normalized values or errors carrying diagnostics
- * and beforeSend/rejected/login flags consumed by runner.mjs and runtime.mjs.
+ * and beforeSend/rejected/login/license/stopped flags consumed by runner.mjs and runtime.mjs.
  * Request-local onResponse callbacks receive successful HTTP/business metadata and
  * redacted, bounded response bodies without changing the parsed-data return contract.
  * Invariants: reuse only a fresh matching observed page, preserve actual website filters,
@@ -171,6 +171,8 @@ export function makeApi(contents, platform) {
         {
           beforeSend: error.beforeSend === true,
           login: error.login === true,
+          license: error.license === true,
+          stopped: error.stopped === true,
         }
       )
     }

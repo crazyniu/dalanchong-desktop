@@ -8,7 +8,7 @@
  * Collection keeps its delay after each API call; invitation intervals separate send
  * call starts only. Preflight, responses and persistence consume that interval naturally.
  * The first send has no timer delay. Quota availability is decided by the send response;
- * Kuaishou's contact endpoint is read once for required sender fields, not quota checks.
+ * Kuaishou's contact fields are reused after a successful fetch, without quota checks.
  * State: jobs and task snapshots use accountId:kind keys, allowing one collection
  * and one invitation per account with independent cancellation and activity batches.
  * Native busy state aggregates both jobs; only an active collection masks the page.
@@ -27,9 +27,9 @@
  * later observations replace captures rather than mutating a running job's response.
  * platform.mjs owns source traversal and pagination rules.
  * Invariants: save 'sending' before dispatch. Kuaishou sends are at least two seconds
- * apart. Its create-invite code 400010 waits five seconds and the configured interval,
- * then retries the same record without advancing counts. Cancellation retains that
- * dispatched record for review. Other uncertain outcomes become review and stop.
+ * apart. Both platforms retry failed preparation/send requests after ten seconds,
+ * preserving longer configured send intervals and the same record without advancing
+ * counts. Cancellation retains a dispatched record for review; unsent rows are removed.
  * beforeSend failures cannot be counted as sent; account switching must not mutate
  * a running job's captured input.
  */
@@ -419,9 +419,36 @@ export class InviteRunner {
     }
   }
   async run(accountId, platform, config, api, queue, task, job) {
-    const request = (path, body = null, onResponse) => {
-      if (job.stopped) throw Object.assign(Error('已停止'), { beforeSend: true })
-      return api(path, body, undefined, onResponse)
+    const waitForRetry = async (error, record) => {
+      if (job.stopped || error.login || error.license || error.stopped) throw error
+      const retryAt = Date.now() + 10000
+      task.current = '邀约失败，10 秒后重试'
+      if (record) {
+        record.note = error.message
+        if (error.response) record.response = error.response
+      }
+      await this.saveTask(task, record ? { records: [record] } : {})
+      this.log(
+        task,
+        `${record ? `${record.name}（${record.talentId}）· ` : ''}邀约失败：${error.message}，10 秒后重试`,
+        error.response
+      )
+      await waitUntil(retryAt, job)
+    }
+    // Preparation requests can resume at the failed step without sending a card.
+    // Keep persistence outside the API catch so a disk error cannot resend a success.
+    const request = async (path, body = null, onResponse) => {
+      const current = task.current
+      while (true) {
+        if (job.stopped) throw Object.assign(Error('已停止'), { beforeSend: true })
+        try {
+          return await api(path, body, undefined, onResponse)
+        } catch (error) {
+          await waitForRetry(error)
+          task.current = current
+          this.emit(task)
+        }
+      }
     }
     let nextSendAt = 0
     const maxInvites = config.maxInvites ?? Infinity
@@ -470,7 +497,7 @@ export class InviteRunner {
           message: config.message,
           note: '',
         }
-        let sending = false
+        let dispatched = false
         let savedSending = false
         let retryResponse
         const candidateRequest = (path, body = null) =>
@@ -501,31 +528,23 @@ export class InviteRunner {
                 throw Object.assign(Error('已停止'), { beforeSend: true })
               task.current = candidate.name
               this.emit(task, 'records')
-              sending = true
               nextSendAt = Date.now() + config.interval
               try {
-                await candidateRequest(invitation.path, invitation.body)
+                await api(invitation.path, invitation.body, undefined, (response) => {
+                  record.response = response
+                })
+                dispatched = true
                 break
               } catch (error) {
+                if (!error.beforeSend) dispatched = true
+                if (error.response) retryResponse = error.response
                 if (
-                  platform !== 'kuaishou' ||
-                  error.beforeSend ||
-                  error.response?.path !== '/distribute/pc/seller/invite/seller/create' ||
-                  error.response.code !== 400010
+                  platform === 'kuaishou' &&
+                  /近7天有未处理|近7天.*被拒绝/.test(error.message)
                 ) throw error
-                // This observed risk-control response is the only automatic retry.
-                // Preserve its response while waiting; Stop cancels waitUntil.
-                retryResponse = error.response
-                record.response = retryResponse
-                record.note = error.message
-                task.current = '快手风控，等待后重试'
-                nextSendAt = Math.max(nextSendAt, Date.now() + 5000)
-                await this.saveTask(task, { records: [record] })
-                this.log(
-                  task,
-                  `${candidate.name}（${candidate.id}）· 风控：${error.message}，等待后重试`,
-                  error.response
-                )
+                // Retry the same card on either platform, including uncertain
+                // transport failures. Stop interrupts the ten-second wait.
+                await waitForRetry(error, record)
               }
             }
             record.status = 'success'
@@ -541,7 +560,7 @@ export class InviteRunner {
           if (record.status === 'success') throw error
           if (error.beforeSend) {
             if (savedSending) {
-              if (retryResponse) {
+              if (dispatched) {
                 record.status = 'review'
                 record.note = `${error.message}，请核实上次邀约结果`
                 record.response = retryResponse
@@ -562,9 +581,9 @@ export class InviteRunner {
             record.recentInvite = true
             task.skipped++
           } else {
-            // Only a confirmed rejection makes a dispatched send a known failure.
-            // Transport/page loss remains uncertain and stops the queue instead of retrying.
-            record.status = sending && !error.rejected ? 'review' : 'failed'
+            // Reaching here means cancellation, account loss, or persistence failure;
+            // ordinary platform errors stay inside the retry loops above.
+            record.status = dispatched && !error.rejected ? 'review' : 'failed'
             task[record.status]++
             job.stopped = true
           }

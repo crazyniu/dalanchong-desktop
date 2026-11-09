@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "大懒虫",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "抖音视频下载与罗盘、百应批量视频操作。",
   "minimum_chrome_version": "116",
   "permissions": [
