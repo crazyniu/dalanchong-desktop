@@ -226,9 +226,9 @@ export async function publishRelease({
     const lookup = await fetch(lookupUrl)
     if (!lookup.ok && lookup.status !== 404)
       throw Error(`Gitee 读取 ${tag} 失败：HTTP ${lookup.status}`)
-    const created = lookup.ok
-      ? await lookup.json()
-      : await gitee('/releases', {
+    // Gitee returns HTTP 200 with JSON null when the tag has no release yet.
+    const giteeRelease = lookup.ok ? await lookup.json() : null
+    const created = giteeRelease ?? await gitee('/releases', {
           method: 'POST',
           json: {
             tag_name: tag,
