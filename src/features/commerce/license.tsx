@@ -8,6 +8,8 @@
  * LicenseStatus uses browser.tsx's openBrowserDialog to capture the page background and
  * finish hiding native views before mounting the dialog; closing restores them afterward.
  * State: useLicense is a display snapshot; activation busy state is local.
+ * Activation failures keep their message and native diagnostic together; copying
+ * exports only the native diagnostic fields, never activation codes or device identity.
  * The initial monitor result owns the centered authorization loading state.
  * Invariants: Rust/server checks remain authoritative. The UI submits only an activation
  * code, never a device ID or expiry. Device codes are copyable display values; blank
@@ -30,7 +32,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { LoadingState } from '@/components/ui/loading-state'
 import { openBrowserDialog } from './browser'
-import { desktop, type LicenseState } from './desktop'
+import { desktop, type LicenseDiagnostic, type LicenseState } from './desktop'
 import { useCommerce } from './store'
 
 const useLicense = create<{ state: LicenseState | null }>(() => ({
@@ -42,6 +44,26 @@ function errorText(error: unknown) {
     /^Error invoking remote method '[^']+': Error: /,
     ''
   )
+}
+
+function diagnosticText(diagnostic: LicenseDiagnostic) {
+  const fields: [string, string | number | null | undefined][] = [
+    ['时间', diagnostic.time],
+    ['操作', diagnostic.action],
+    ['接口', diagnostic.endpoint],
+    ['失败阶段', diagnostic.stage],
+    ['错误详情', diagnostic.detail],
+    ['HTTP 状态', diagnostic.httpStatus],
+    ['请求 ID', diagnostic.requestId],
+    ['Cloudflare Ray ID', diagnostic.cfRay],
+    ['响应类型', diagnostic.contentType],
+    ['软件版本', diagnostic.appVersion],
+    ['操作系统', diagnostic.os],
+  ]
+  return fields
+    .filter(([, value]) => value != null)
+    .map(([label, value]) => `${label}：${value}`)
+    .join('\n')
 }
 
 function DeviceCode({
@@ -105,23 +127,33 @@ function ActivationForm() {
   const state = useLicense((s) => s.state)
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
+  const [failure, setFailure] = useState<{
+    message: string
+    diagnostic?: LicenseDiagnostic | null
+  } | null>(null)
   async function submit(event: FormEvent) {
     event.preventDefault()
     setBusy(true)
-    setError('')
+    setFailure(null)
     try {
       const result = await desktop!.activateLicense(code)
-      if (!result.valid) setError(result.message || '激活失败，请重试')
+      if (!result.valid) {
+        setFailure({
+          message: result.message || '激活失败，请重试',
+          diagnostic: result.diagnostic,
+        })
+      }
     } catch (e) {
-      setError(errorText(e))
+      setFailure({ message: errorText(e) })
     } finally {
       setBusy(false)
     }
   }
-  const message =
-    error ||
-    (!state?.valid && state?.reason !== 'not_activated' ? state?.message : '')
+  const error = busy || state?.valid
+    ? null
+    : failure ?? (state?.reason !== 'not_activated' ? state : null)
+  const message = error?.message
+  const diagnostic = error?.diagnostic
   return (
     <form onSubmit={submit} className='space-y-5' aria-busy={busy}>
       <div className='space-y-2'>
@@ -141,13 +173,33 @@ function ActivationForm() {
         />
       </div>
       {message && (
-        <p
-          id='activation-error'
-          role='alert'
-          className='text-sm text-destructive'
-        >
-          {message}
-        </p>
+        <div className='space-y-2'>
+          <p
+            id='activation-error'
+            role='alert'
+            className='text-sm text-destructive'
+          >
+            {message}
+          </p>
+          {diagnostic && (
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(diagnosticText(diagnostic))
+                  toast.success('错误详情已复制')
+                } catch {
+                  toast.error('复制错误详情失败')
+                }
+              }}
+            >
+              <Copy className='size-4' />
+              复制错误详情
+            </Button>
+          )}
+        </div>
       )}
       <Button
         type='submit'

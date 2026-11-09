@@ -46,6 +46,19 @@ export type RuntimeData = {
   filters?: Record<string, Filters>
   selected?: Record<Account['platform'], string>
 }
+export type LicenseDiagnostic = {
+  time: string
+  action: string
+  endpoint: string
+  stage: string
+  detail: string
+  httpStatus?: number | null
+  requestId?: string | null
+  cfRay?: string | null
+  contentType?: string | null
+  appVersion: string
+  os: string
+}
 export type LicenseState = {
   deviceId: string
   checked: boolean
@@ -55,6 +68,7 @@ export type LicenseState = {
   hasCode: boolean
   activatedAt: string | null
   expiresAt: string | null
+  diagnostic?: LicenseDiagnostic | null
 }
 export type UpdateState = {
   currentVersion: string
@@ -92,7 +106,11 @@ declare global {
       getLicenseState: () => Promise<LicenseState>
       activateLicense: (
         code: string
-      ) => Promise<{ valid: boolean; message?: string }>
+      ) => Promise<{
+        valid: boolean
+        message?: string
+        diagnostic?: LicenseDiagnostic | null
+      }>
       initialize: () => Promise<RuntimeData>
       queryData: <T>(request: DataQuery) => Promise<T>
       deleteData: (request: DataQuery) => Promise<void>

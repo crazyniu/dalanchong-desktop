@@ -7,17 +7,19 @@
 //! State: monitor verifies once at startup and every 600 seconds, including after failure.
 //! An async mutex serializes service calls; a separate short-lived state lock lets
 //! business operations read the latest result without waiting for the network.
+//! Request failures retain an in-memory diagnostic for the activation form to copy;
+//! diagnostics contain transport errors and selected response headers, never bodies or codes.
 //! Invariants: the server owns validity/expiry and one-code/one-device binding. Never
 //! activate as a verification fallback, trust persisted validity, or accept a client-supplied
 //! device ID. Failed replacement codes preserve the previous code. Cleanup can still run
 //! after expiry. UI state must never expose the stored activation code.
 
 use serde_json::{json, Value};
-use std::{path::PathBuf, sync::Mutex as StateMutex, time::Duration};
+use std::{error::Error, path::PathBuf, sync::Mutex as StateMutex, time::Duration};
 use tauri::{AppHandle, Emitter, Manager, Webview};
 use tokio::sync::Mutex;
 
-const API: &str = "https://lfrgswefkgdzhureqzod.supabase.co/functions/v1/license-api";
+const API: &str = "https://dabudian.top/functions/v1/license-api";
 const MONITOR_INTERVAL: Duration = Duration::from_secs(600);
 
 pub struct LicenseService {
@@ -41,9 +43,42 @@ fn message(reason: &str) -> &'static str {
         "device_disabled" => "此设备已被禁用，请联系管理员",
         "hardware_unavailable" => "无法读取硬件设备码，请重新启动软件",
         "expired" => "激活码已过期，请更换激活码",
-        "network_error" => "无法连接授权服务，请检查网络",
+        "request_timeout" => "授权请求超时（15 秒）",
+        "connection_error" => "无法建立授权连接，请复制错误详情",
+        "request_error" => "授权请求失败，请复制错误详情",
+        "response_timeout" => "已连接授权服务，但接收响应超时",
+        "response_error" => "已连接授权服务，但响应接收失败",
+        "invalid_response" => "授权服务响应格式错误，请复制错误详情",
         _ => "",
     }
+}
+
+fn result_message(result: &Value) -> String {
+    let reason = result["reason"].as_str().unwrap_or("");
+    if reason == "http_error" {
+        return format!("授权服务返回 HTTP {}", result["diagnostic"]["httpStatus"]);
+    }
+    message(reason).to_string()
+}
+
+fn request_failure(reason: &str, stage: &str, detail: String, mut diagnostic: Value) -> Value {
+    diagnostic["stage"] = json!(stage);
+    diagnostic["detail"] = json!(detail);
+    json!({"valid": false, "reason": reason, "diagnostic": diagnostic})
+}
+
+/// Preserve the transport's cause chain, which distinguishes DNS, TLS and proxy errors.
+/// Request bodies are never formatted; the endpoint is recorded separately without credentials.
+fn transport_detail(error: reqwest::Error) -> String {
+    let error = error.without_url();
+    let mut detail = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        detail.push_str(": ");
+        detail.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    detail
 }
 
 impl License {
@@ -71,7 +106,8 @@ impl License {
             "deviceId": device_id.as_deref().unwrap_or(""),
             "hasCode": !code.is_empty(),
             "activatedAt": null,
-            "expiresAt": null
+            "expiresAt": null,
+            "diagnostic": null
         });
         Ok(Self {
             service: Mutex::new(LicenseService {
@@ -92,9 +128,19 @@ impl LicenseService {
         let Some(device_id) = self.device_id.as_deref() else {
             return json!({"valid": false, "reason": "hardware_unavailable"});
         };
+        let endpoint = format!("{API}/{action}");
+        let mut diagnostic = json!({
+            "time": time::OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap(),
+            "action": action,
+            "endpoint": endpoint,
+            "appVersion": env!("CARGO_PKG_VERSION"),
+            "os": std::env::consts::OS
+        });
         let response = self
             .client
-            .post(format!("{API}/{action}"))
+            .post(&endpoint)
             .json(&json!({
                 "app_id": "dalanchong",
                 "code": code,
@@ -102,12 +148,56 @@ impl LicenseService {
             }))
             .send()
             .await;
-        match response {
-            Ok(response) if response.status().is_success() => response
-                .json()
-                .await
-                .unwrap_or_else(|_| json!({"valid": false, "reason": "network_error"})),
-            _ => json!({"valid": false, "reason": "network_error"}),
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                let reason = if error.is_timeout() {
+                    "request_timeout"
+                } else if error.is_connect() {
+                    "connection_error"
+                } else {
+                    "request_error"
+                };
+                return request_failure(reason, "request", transport_detail(error), diagnostic);
+            }
+        };
+        let status = response.status();
+        diagnostic["httpStatus"] = json!(status.as_u16());
+        for (field, header) in [
+            ("requestId", "sb-request-id"),
+            ("cfRay", "cf-ray"),
+            ("contentType", "content-type"),
+        ] {
+            diagnostic[field] = json!(response
+                .headers()
+                .get(header)
+                .and_then(|value| value.to_str().ok()));
+        }
+        if !status.is_success() {
+            return request_failure("http_error", "http", status.to_string(), diagnostic);
+        }
+        match response.json::<Value>().await {
+            Ok(mut result) if result["valid"].is_boolean() && result["reason"].is_string() => {
+                // Diagnostics describe native transport failures, not fields supplied by the server.
+                result["diagnostic"] = Value::Null;
+                result
+            }
+            Ok(_) => request_failure(
+                "invalid_response",
+                "protocol",
+                "Response is missing valid or reason".into(),
+                diagnostic,
+            ),
+            Err(error) => {
+                let (reason, stage) = if error.is_timeout() {
+                    ("response_timeout", "body")
+                } else if error.is_decode() {
+                    ("invalid_response", "decode")
+                } else {
+                    ("response_error", "body")
+                };
+                request_failure(reason, stage, transport_detail(error), diagnostic)
+            }
         }
     }
 
@@ -117,11 +207,12 @@ impl LicenseService {
             "checked": true,
             "valid": result["valid"] == true,
             "reason": reason,
-            "message": message(reason),
+            "message": result_message(&result),
             "deviceId": self.device_id.as_deref().unwrap_or(""),
             "hasCode": !self.code.is_empty(),
             "activatedAt": result["activated_at"],
-            "expiresAt": result["expires_at"]
+            "expiresAt": result["expires_at"],
+            "diagnostic": result["diagnostic"]
         });
         let license = app.state::<License>();
         let mut current = license.state.lock().unwrap();
@@ -211,7 +302,8 @@ pub async fn license_activate(
         // A failed replacement must preserve the previous code and valid state rather than revoke a working license.
         let response = json!({
             "valid": false,
-            "message": message(result["reason"].as_str().unwrap_or("invalid_license"))
+            "message": result_message(&result),
+            "diagnostic": result["diagnostic"]
         });
         let valid = service.state.lock().unwrap()["valid"] == true;
         if !valid {
