@@ -7,7 +7,11 @@
  * valid authorization, and replace the application with the activation form on failure.
  * LicenseStatus uses browser.tsx's openBrowserDialog to capture the page background and
  * finish hiding native views before mounting the dialog; closing restores them afterward.
- * State: useLicense is a display snapshot; activation busy state is local.
+ * State: useLicense is a display snapshot; code/operation state stays in the form.
+ * The form reads the saved native code locally before enabling editing. Matching
+ * normalized input re-verifies that saved code; new input or a device_unbound result
+ * uses explicit activation. Failed verification never invokes activation. Codes never enter
+ * localStorage, diagnostic copies, shared license snapshots or logs.
  * Activation failures keep their message and native diagnostic together; copying
  * exports only the native diagnostic fields, never activation codes or device identity.
  * The initial monitor result owns the centered authorization loading state.
@@ -126,36 +130,59 @@ function DeviceCode({
 function ActivationForm() {
   const state = useLicense((s) => s.state)
   const [code, setCode] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [savedCode, setSavedCode] = useState('')
+  const [loadingSavedCode, setLoadingSavedCode] = useState(true)
+  const [operation, setOperation] = useState<'activate' | 'verify' | null>(null)
   const [failure, setFailure] = useState<{
     message: string
     diagnostic?: LicenseDiagnostic | null
   } | null>(null)
+  const normalizeCode = (value: string) => value.toUpperCase().replace(/[\s-]/g, '')
+  const normalizedCode = normalizeCode(code)
+  const verifying = state?.reason !== 'device_unbound' && Boolean(savedCode)
+    && normalizedCode === normalizeCode(savedCode)
+  const busy = operation !== null
+  useEffect(() => {
+    let mounted = true
+    desktop!.getSavedLicenseCode()
+      .then((saved) => {
+        if (!mounted) return
+        setSavedCode(saved)
+        setCode(saved)
+      })
+      .catch((error) => {
+        if (mounted) toast.error(errorText(error))
+      })
+      .finally(() => { if (mounted) setLoadingSavedCode(false) })
+    return () => { mounted = false }
+  }, [])
   async function submit(event: FormEvent) {
     event.preventDefault()
-    setBusy(true)
+    setOperation(verifying ? 'verify' : 'activate')
     setFailure(null)
     try {
-      const result = await desktop!.activateLicense(code)
+      const result = verifying
+        ? await desktop!.verifyLicense()
+        : await desktop!.activateLicense(code)
       if (!result.valid) {
         setFailure({
-          message: result.message || '激活失败，请重试',
+          message: result.message || (verifying ? '验证失败，请重试' : '激活失败，请重试'),
           diagnostic: result.diagnostic,
         })
       }
     } catch (e) {
       setFailure({ message: errorText(e) })
     } finally {
-      setBusy(false)
+      setOperation(null)
     }
   }
-  const error = busy || state?.valid
+  const error = busy || loadingSavedCode || state?.valid
     ? null
     : failure ?? (state?.reason !== 'not_activated' ? state : null)
   const message = error?.message
   const diagnostic = error?.diagnostic
   return (
-    <form onSubmit={submit} className='space-y-5' aria-busy={busy}>
+    <form onSubmit={submit} className='space-y-5' aria-busy={busy || loadingSavedCode}>
       <div className='space-y-2'>
         <Label htmlFor='activation-code'>激活码</Label>
         <Input
@@ -166,7 +193,7 @@ function ActivationForm() {
           autoComplete='off'
           spellCheck={false}
           maxLength={100}
-          disabled={busy}
+          disabled={busy || loadingSavedCode}
           aria-invalid={Boolean(message)}
           aria-describedby={message ? 'activation-error' : undefined}
           className='h-11 font-mono'
@@ -203,11 +230,11 @@ function ActivationForm() {
       )}
       <Button
         type='submit'
-        disabled={busy || !code.trim() || !state?.deviceId}
+        disabled={busy || loadingSavedCode || !normalizedCode || !state?.deviceId}
         className='h-11 w-full'
       >
-        {busy && <LoaderCircle className='size-4 animate-spin' />}
-        激活
+        {(busy || loadingSavedCode) && <LoaderCircle className='size-4 animate-spin' />}
+        {loadingSavedCode ? '正在读取…' : busy ? operation === 'verify' ? '验证中…' : '激活中…' : verifying ? '重新验证' : '激活'}
       </Button>
     </form>
   )

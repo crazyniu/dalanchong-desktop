@@ -84,7 +84,7 @@ export function TutorialPage() {
               </Link>
             </Button>
             <Button asChild variant='outline'>
-              <Link to='/workbench'>多店铺<ArrowUpRight /></Link>
+              <Link to='/workbench'>多店铺管理<ArrowUpRight /></Link>
             </Button>
           </nav>
 

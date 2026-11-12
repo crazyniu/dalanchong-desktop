@@ -1,14 +1,16 @@
 /**
  * AI module map
- * Purpose: generate platform icon assets from assets/icons/white-master.png.
+ * Purpose: generate transparent, rounded native icons from assets/icons/white-master.png.
  * Entry: run as a Node script only when icon regeneration is explicitly requested.
- * Flow: use macOS sips to resize PNGs, assemble ICNS/ICO outputs, and copy web/Tauri icons.
+ * Flow: render-native-icons.swift creates optical-margin Mac/Windows RGBA masters;
+ * sips resizes them, iconutil assembles ICNS, and this script writes a multi-size ICO.
  * Side effects: writes icon assets and invokes native image tools; it is not a read-only
- * inspection utility. Preserve the source master and existing application icon references.
+ * inspection utility. Preserve the source master and web branding. Native platform
+ * icon references use app.iconset for Mac and tauri/256x256.png plus ICO for Windows.
  */
 
 import { execFileSync } from 'node:child_process'
-import { mkdir, readFile, writeFile, cp } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 const root = path.resolve(import.meta.dirname, '..')
@@ -23,16 +25,12 @@ function resize(source, size, target) {
   )
 }
 
-resize(
+execFileSync('swift', [
+  path.join(root, 'scripts/render-native-icons.swift'),
   path.join(icons, 'white-master.png'),
-  1024,
-  path.join(icons, 'mac-1024.png')
-)
-resize(
-  path.join(icons, 'white-master.png'),
-  1024,
-  path.join(icons, 'icon-1024.png')
-)
+  path.join(icons, 'mac-1024.png'),
+  path.join(icons, 'icon-1024.png'),
+], { stdio: 'inherit' })
 for (const size of [16, 32, 128, 256, 512]) {
   resize(
     path.join(icons, 'mac-1024.png'),
@@ -54,7 +52,7 @@ execFileSync('iconutil', [
 ])
 
 // PNG-compressed, 32-bit RGBA frames for modern Windows desktop applications.
-const sizes = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256]
+const sizes = [16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 80, 96, 128, 256]
 const frames = []
 for (const size of sizes) {
   const file = path.join(icons, `icon-${size}.png`)
@@ -75,27 +73,6 @@ frames.forEach((frame, index) => {
   offset += frame.length
 })
 await writeFile(path.join(icons, 'app.ico'), Buffer.concat([header, ...frames]))
-for (const publicDir of [path.join(root, 'public')]) {
-  await mkdir(publicDir, { recursive: true })
-  await cp(path.join(icons, 'icon-256.png'), path.join(publicDir, 'brand.png'))
-  await cp(
-    path.join(icons, 'original.png'),
-    path.join(publicDir, 'brand-transparent.png')
-  )
-  await cp(path.join(icons, 'icon-64.png'), path.join(publicDir, 'favicon.png'))
-}
-console.log('Exported macOS ICNS, Windows ICO, PNG sizes and web branding.')
-
-execFileSync(
-  'pnpm',
-  [
-    'tauri',
-    'icon',
-    path.join(icons, 'icon-256.png'),
-    '-o',
-    path.join(icons, 'tauri'),
-    '-p',
-    '256',
-  ],
-  { cwd: root, stdio: 'inherit' }
-)
+await mkdir(path.join(icons, 'tauri'), { recursive: true })
+resize(path.join(icons, 'icon-1024.png'), 256, path.join(icons, 'tauri/256x256.png'))
+console.log('Exported rounded transparent macOS ICNS and Windows ICO/PNG icons.')

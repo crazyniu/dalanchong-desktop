@@ -10,6 +10,8 @@
     "core:window:allow-inner-size",
     "core:window:allow-scale-factor",
     "allow-license-state",
+    "allow-license-saved-code",
+    "allow-license-verify",
     "allow-license-activate",
     "allow-runtime-load",
     "allow-runtime-save",
@@ -41,6 +43,13 @@
     "allow-chrome-accounts",
     "allow-chrome-save-account",
     "allow-chrome-open",
-    "allow-chrome-remove-account"
+    "allow-chrome-remove-account",
+    "allow-video-montage-platform",
+    "allow-video-montage-pick-directory",
+    "allow-video-montage-list",
+    "allow-video-montage-open-directory",
+    "allow-video-montage-state",
+    "allow-video-montage-start",
+    "allow-video-montage-cancel"
   ]
 }

@@ -19,7 +19,8 @@
  * Collection upserts preserve account-scoped IDs through the database UID index.
  * Each invitation step commits its changed record and task; UI receives task updates
  * and database invalidations rather than full history arrays. Activity is persisted
- * to the log table and only its latest 200 entries remain in the visible task.
+ * to the log table; running collection tasks retain the latest 200 entries and clear
+ * that session activity when stopped or finished. Durable logs remain available.
  * Invitation rows retain their own send response, or the final preflight response when
  * skipped; platform.mjs supplies redacted bodies. Quota replies never enter these rows.
  * Per-talent collection messages show names and insert/update results; IDs stay in data.
@@ -27,9 +28,11 @@
  * later observations replace captures rather than mutating a running job's response.
  * platform.mjs owns source traversal and pagination rules.
  * Invariants: save 'sending' before dispatch. Kuaishou sends are at least two seconds
- * apart. Both platforms retry failed preparation/send requests after ten seconds,
- * preserving longer configured send intervals and the same record without advancing
- * counts. Cancellation retains a dispatched record for review; unsent rows are removed.
+ * apart and Douyin sends at least five seconds apart. Failed preparation/send requests wait ten seconds, or sixty seconds for
+ * request-frequency errors, preserving longer configured send intervals and the same
+ * record without advancing counts. retryAt exposes the deadline for UI-only countdowns.
+ * Douyin retries refresh eligibility and product terms from the account page.
+ * Cancellation retains a dispatched record for review; unsent rows are removed.
  * beforeSend failures cannot be counted as sent; account switching must not mutate
  * a running job's captured input.
  */
@@ -60,7 +63,7 @@ export function validateConfig(platform, config) {
     throw Error('请填写有效邀约话术，抖音最多 150 字')
   if (platform === 'douyin' && !config.phone.trim() && !config.wechat.trim())
     throw Error('请填写手机号或微信号')
-  const minimumInterval = platform === 'kuaishou' ? 2000 : 500
+  const minimumInterval = platform === 'kuaishou' ? 2000 : 5000
   if (
     !Number.isSafeInteger(config.interval) ||
     config.interval < minimumInterval ||
@@ -183,7 +186,9 @@ export class InviteRunner {
       kind: task.kind,
     }))
     job.activities.push(...activities)
-    task.activity = [...(task.activity || []), ...activities].slice(-200)
+    task.activity = task.status === 'running'
+      ? [...(task.activity || []), ...activities].slice(-200)
+      : []
   }
   async saveTask(task, changes = {}) {
     const pending = this.jobs.get(`${task.accountId}:${task.kind}`).activities
@@ -201,6 +206,7 @@ export class InviteRunner {
     job.promise = operation()
       .catch((error) => {
         task.status = 'stopped'
+        if (task.kind === 'collect') task.activity = []
         task.current = `任务异常：${error.message}`
         this.log(task, task.current, error.response)
       })
@@ -231,6 +237,7 @@ export class InviteRunner {
       await this.saveTask(task)
     } catch (error) {
       task.status = 'stopped'
+      if (task.kind === 'collect') task.activity = []
       task.current = `任务保存失败：${error.message}`
       this.log(task, task.current)
       job.stopped = true
@@ -253,6 +260,13 @@ export class InviteRunner {
       if (job) {
         job.stopped = true
         job.wake?.()
+        if (target === 'collect') {
+          const task = this.data.tasks[`${accountId}:collect`]
+          task.status = 'stopped'
+          task.current = '采集已停止'
+          task.activity = []
+          this.emit(task)
+        }
       }
     }
     await this.syncTaskState(accountId)
@@ -376,7 +390,9 @@ export class InviteRunner {
   async start(accountId, config, talentIds) {
     if (this.jobs.has(`${accountId}:invite`)) throw Error('该账号已有邀约任务正在运行')
     const { platform, api } = this.getConnection(accountId, 'invite')
-    validateConfig(platform, config)
+    const configSnapshot = structuredClone(config)
+    if (platform === 'douyin') configSnapshot.interval = Math.max(5000, configSnapshot.interval)
+    validateConfig(platform, configSnapshot)
     const selected = [...new Set(talentIds)]
     if (!selected.length) throw Error('请先从采集列表选择达人')
     const available = await this.query({ kind: 'talent_ids', platform, accountId, ids: selected })
@@ -385,7 +401,6 @@ export class InviteRunner {
     const snapshot = await this.query({ kind: 'invite_ids', platform, accountId, ids: available })
     if (!snapshot.length) throw Error('没有无邀约记录的达人')
     if (this.jobs.has(`${accountId}:invite`)) throw Error('该账号已有邀约任务正在运行')
-    const configSnapshot = structuredClone(config)
     const { task, job } = this.createJob(
       accountId,
       platform,
@@ -419,38 +434,48 @@ export class InviteRunner {
     }
   }
   async run(accountId, platform, config, api, queue, task, job) {
+    let nextSendAt = 0
     const waitForRetry = async (error, record) => {
       if (job.stopped || error.login || error.license || error.stopped) throw error
-      const retryAt = Date.now() + 10000
-      task.current = '邀约失败，10 秒后重试'
+      const frequent = (platform === 'douyin' && String(error.code) === '11001')
+        || /请求过于频繁|请求频繁/.test(error.message)
+      const now = Date.now()
+      const retryAt = Math.max(now + (frequent ? 60000 : 10000), nextSendAt)
+      const seconds = Math.ceil((retryAt - now) / 1000)
+      const current = task.current
+      task.current = frequent ? '请求频繁' : '邀约失败'
+      task.retryAt = retryAt
       if (record) {
         record.note = error.message
         if (error.response) record.response = error.response
       }
-      await this.saveTask(task, record ? { records: [record] } : {})
-      this.log(
-        task,
-        `${record ? `${record.name}（${record.talentId}）· ` : ''}邀约失败：${error.message}，10 秒后重试`,
-        error.response
-      )
-      await waitUntil(retryAt, job)
+      try {
+        await this.saveTask(task, record ? { records: [record] } : {})
+        // log emits this deadline once; countdown ticks belong to the UI.
+        this.log(
+          task,
+          `${record ? `${record.name}（${record.talentId}）· ` : ''}邀约失败：${error.message}，${seconds} 秒后重试`,
+          error.response
+        )
+        await waitUntil(retryAt, job)
+      } finally {
+        delete task.retryAt
+        task.current = current
+        this.emit(task)
+      }
     }
     // Preparation requests can resume at the failed step without sending a card.
     // Keep persistence outside the API catch so a disk error cannot resend a success.
     const request = async (path, body = null, onResponse) => {
-      const current = task.current
       while (true) {
         if (job.stopped) throw Object.assign(Error('已停止'), { beforeSend: true })
         try {
           return await api(path, body, undefined, onResponse)
         } catch (error) {
           await waitForRetry(error)
-          task.current = current
-          this.emit(task)
         }
       }
     }
-    let nextSendAt = 0
     const maxInvites = config.maxInvites ?? Infinity
     try {
       const contact = platform === 'kuaishou'
@@ -503,7 +528,7 @@ export class InviteRunner {
         const candidateRequest = (path, body = null) =>
           request(path, body, (response) => { record.response = response })
         try {
-          const invitation = await prepareInvite(
+          let invitation = await prepareInvite(
             candidateRequest,
             platform,
             config,
@@ -517,6 +542,28 @@ export class InviteRunner {
           } else {
             while (true) {
               await waitUntil(nextSendAt, job)
+              if (platform === 'douyin' && savedSending) {
+                // Refresh after the retry/interval waits, so another send does not
+                // reuse the previous attempt's eligibility or commission response.
+                invitation = await prepareInvite(
+                  candidateRequest,
+                  platform,
+                  config,
+                  candidate,
+                  contact,
+                  tags
+                )
+                if (invitation.skip) {
+                  // A changed eligibility result cannot establish whether the
+                  // previous dispatched card reached the talent.
+                  if (dispatched)
+                    throw Object.assign(Error(invitation.skip), { beforeSend: true })
+                  record.status = 'skipped'
+                  record.note = invitation.skip
+                  task.skipped++
+                  break
+                }
+              }
               // Commit the same sending row before every dispatch. A process exit
               // leaves one reviewable record, never a success or a duplicate row.
               delete record.response
@@ -542,19 +589,21 @@ export class InviteRunner {
                   platform === 'kuaishou' &&
                   /近7天有未处理|近7天.*被拒绝/.test(error.message)
                 ) throw error
-                // Retry the same card on either platform, including uncertain
-                // transport failures. Stop interrupts the ten-second wait.
+                // Retry the same talent, including uncertain transport failures.
+                // Stop interrupts either retry delay immediately.
                 await waitForRetry(error, record)
               }
             }
-            record.status = 'success'
-            task.success++
-            task.processed++
-            await this.saveTask(task, { records: [record] })
-            this.emit(task, 'records')
-            // Stop the generator before it loads another 200-row batch/history.
-            if (task.success >= maxInvites) break
-            continue
+            if (record.status !== 'skipped') {
+              record.status = 'success'
+              task.success++
+              task.processed++
+              await this.saveTask(task, { records: [record] })
+              this.emit(task, 'records')
+              // Stop the generator before it loads another 200-row batch/history.
+              if (task.success >= maxInvites) break
+              continue
+            }
           }
         } catch (error) {
           if (record.status === 'success') throw error

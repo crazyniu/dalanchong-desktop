@@ -22,7 +22,7 @@ const config = {
   message: '邀请合作',
   phone: '',
   wechat: 'test',
-  interval: 500,
+  interval: 5000,
   maxInvites: 1,
 }
 const capture = {
@@ -59,6 +59,8 @@ function persistence(data, afterSave = async () => {}) {
       const talents = data.talents.filter((row) => row.platform === platform &&
         row.sourceAccountId === accountId && ids.includes(row.id))
       if (kind === 'talent_ids') return talents.map((row) => row.id)
+      if (kind === 'invite_ids') return talents.filter((row) =>
+        !alreadyHandled(data.records, accountId, platform, row.id)).map((row) => row.id)
       if (kind === 'talent_batch') return structuredClone(talents)
       assert.equal(kind, 'history')
       return structuredClone(data.records.filter((row) => row.platform === platform &&
@@ -124,7 +126,7 @@ test('collection preserves filters, persists a deduplicated account list, and ne
     }),
   })
   await runner.collect('a')
-  await runner.jobs.get('a').promise
+  await runner.jobs.get('a:collect').promise
   assert.deepEqual(
     requests.map((x) => x.page),
     [1, 2]
@@ -134,31 +136,29 @@ test('collection preserves filters, persists a deduplicated account list, and ne
   assert.equal(requests[1].search_id, 'native-search')
   assert.equal(data.talents.length, 1)
   assert.equal(data.talents[0].sourceAccountId, 'a')
-  assert.equal(data.tasks.a.kind, 'collect')
-  assert.equal(data.tasks.a.status, 'done')
-  assert.deepEqual(data.tasks.a.logs, [])
+  assert.equal(data.tasks['a:collect'].kind, 'collect')
+  assert.equal(data.tasks['a:collect'].status, 'done')
+  assert.deepEqual(data.tasks['a:collect'].logs, [])
   assert.equal(data.collections[0].count, 1)
   assert.equal(data.records.length, 0)
   assert.ok(
-    saves.some((s) => s.talents.length === 1 && s.tasks.a.status === 'running')
+    saves.some((s) => s.talents.length === 1 && s.tasks['a:collect'].status === 'running')
   )
 })
-test('history is scoped to the sending account, with seven-day Kuaishou expiry and unresolved review blocking', () => {
-  const records = [
-    {
-      accountId: 'a',
-      talentId: 't',
-      status: 'success',
-      time: new Date(Date.now() - 8 * 86400000).toISOString(),
-    },
-  ]
-  assert.equal(alreadyHandled(records, 'a', 'kuaishou', 't'), false)
-  assert.equal(alreadyHandled(records, 'a', 'douyin', 't'), true)
-  assert.equal(alreadyHandled(records, 'b', 'douyin', 't'), false)
-  records[0].status = 'review'
-  assert.equal(alreadyHandled(records, 'a', 'kuaishou', 't'), true)
+test('all prior invitation statuses block the same platform and account without a date cutoff', () => {
+  for (const platform of ['douyin', 'kuaishou']) for (const status of ['success', 'skipped', 'failed', 'review', 'sending']) {
+    const records = [{ accountId: 'a', platform, talentId: 't', status,
+      time: new Date(Date.now() - 30 * 86400000).toISOString() }]
+    assert.equal(alreadyHandled(records, 'a', platform, 't'), true)
+    assert.equal(alreadyHandled(records, 'b', platform, 't'), false)
+    assert.equal(alreadyHandled(records, 'a', platform === 'douyin' ? 'kuaishou' : 'douyin', 't'), false)
+  }
 })
 test('Douyin message limit and product configuration fail before any request', () => {
+  assert.throws(() => validateConfig('douyin', { ...config, interval: 4999 }), /5000/)
+  assert.doesNotThrow(() => validateConfig('douyin', { ...config, interval: 5000 }))
+  assert.throws(() => validateConfig('kuaishou', { ...config, interval: 1999 }), /2000/)
+  assert.doesNotThrow(() => validateConfig('kuaishou', { ...config, interval: 2000 }))
   assert.throws(
     () => validateConfig('douyin', { ...config, message: '字'.repeat(151) }),
     /150/
@@ -172,6 +172,38 @@ test('Douyin message limit and product configuration fail before any request', (
   assert.doesNotThrow(() =>
     validateConfig('douyin', { ...config, products: '1,1,2,3,4,5' })
   )
+})
+test('Douyin sends keep a five-second floor for old settings and retain longer intervals', async (t) => {
+  for (const interval of [500, 7000]) {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 })
+    const sends = []
+    const data = state([{ ...talent }, { ...talent, id: 'second', uid: '2' }])
+    const savedConfig = { ...config, interval, maxInvites: null }
+    const runner = new InviteRunner({
+      data, ...persistence(data), emit: () => {},
+      getConnection: () => ({ platform: 'douyin', api: async (path) => {
+        if (path.includes('account_check')) return { data: { is_passed: true, connection_type: 1 } }
+        if (path.includes('promotion/list')) return { data: { promotion_list: [{ product_id: '123' }] } }
+        assert.equal(path, '/connection/pc/im/invite/card/send')
+        sends.push(Date.now())
+        return { code: 0 }
+      } }),
+    })
+    await runner.start('a', savedConfig, ['person', 'second'])
+    const job = runner.jobs.get('a:invite')
+    await new Promise(setImmediate)
+    assert.deepEqual(sends, [100000])
+    const actualInterval = Math.max(5000, interval)
+    t.mock.timers.tick(actualInterval - 1)
+    await new Promise(setImmediate)
+    assert.equal(sends.length, 1)
+    t.mock.timers.tick(1)
+    await job.promise
+    assert.deepEqual(sends, [100000, 100000 + actualInterval])
+    assert.equal(data.tasks['a:invite'].success, 2)
+    assert.equal(savedConfig.interval, interval)
+    t.mock.timers.reset()
+  }
 })
 test('product commission settings from the platform are retained in the outgoing invitation', async () => {
   const api = async (path) =>
@@ -197,35 +229,41 @@ test('product commission settings from the platform are retained in the outgoing
     { ratio: 20 }
   )
 })
-test('quota exhaustion is decided by the send response without proactively querying quota', async () => {
+test('quota exhaustion retries the same record without querying quota or advancing counts', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 })
   const calls = []
+  let sends = 0
   const data = state([{ ...talent }])
   const runner = new InviteRunner({
-    data,
-    ...persistence(data),
-    emit: () => {},
-    getConnection: () => ({
-      platform: 'douyin',
-      url: urls.douyin,
-      capture,
-      api: async (path) => {
-        calls.push(path)
-        if (path.includes('account_check'))
-          return { data: { is_passed: true, connection_type: 1 } }
-        if (path.includes('promotion/list'))
-          return { data: { promotion_list: [{ product_id: '123' }] } }
-        assert.equal(path, '/connection/pc/im/invite/card/send')
-        throw Object.assign(Error('额度已用完'), { rejected: true })
-      },
-    }),
+    data, ...persistence(data), emit: () => {},
+    getConnection: () => ({ platform: 'douyin', api: async (path) => {
+      calls.push(path)
+      if (path.includes('account_check')) return { data: { is_passed: true, connection_type: 1 } }
+      if (path.includes('promotion/list')) return { data: { promotion_list: [{ product_id: '123' }] } }
+      assert.equal(path, '/connection/pc/im/invite/card/send')
+      if (++sends === 1) throw Object.assign(Error('额度已用完'), { rejected: true })
+      return { code: 0 }
+    } }),
   })
   await runner.start('a', config, ['person'])
-  await runner.jobs.get('a')?.promise
-  assert.equal(calls.length, 3)
+  const job = runner.jobs.get('a:invite')
+  await new Promise(setImmediate)
+  const task = data.tasks['a:invite']
+  assert.equal(task.status, 'running')
+  assert.equal(task.retryAt, 110000)
+  assert.equal(task.processed, 0)
+  const recordId = data.records[0].id
+  t.mock.timers.tick(10000)
+  await job.promise
+  assert.equal(sends, 2)
+  assert.equal(calls.length, 6)
   assert.equal(data.records.length, 1)
-  assert.equal(data.records[0].status, 'failed')
-  assert.equal(data.tasks.a.status, 'stopped')
-  assert.match(data.tasks.a.logs[0].message, /额度已用完/)
+  assert.equal(data.records[0].id, recordId)
+  assert.equal(data.records[0].status, 'success')
+  assert.equal(task.success, 1)
+  assert.equal(task.failed, 0)
+  assert.equal(task.processed, 1)
+  assert.equal(task.status, 'done')
 })
 test('uncertain send is persisted as review and is not resent on the next run', async () => {
   const data = state([{ ...talent }])
@@ -260,25 +298,22 @@ test('uncertain send is persisted as review and is not resent on the next run', 
     data,
     ...persistence(data, async () => { saves.push(structuredClone(data)) }),
     emit: () => {},
-    onLog: (entry) => errors.push(entry),
+    onLog: (entry) => { errors.push(entry); void runner.stop('a', 'invite') },
     getConnection: () => ({ platform: 'douyin', url: urls.douyin, capture, api }),
   })
   await runner.start('a', config, ['person'])
-  await runner.jobs.get('a')?.promise
+  await runner.jobs.get('a:invite')?.promise
   assert.equal(data.records[0].status, 'review')
-  assert.equal(data.tasks.a.status, 'stopped')
-  assert.equal(data.tasks.a.logs.length, 1)
-  assert.deepEqual(data.tasks.a.logs[0].response, response)
+  assert.equal(data.tasks['a:invite'].status, 'stopped')
+  assert.equal(data.tasks['a:invite'].logs.length, 1)
+  assert.deepEqual(data.tasks['a:invite'].logs[0].response, response)
   assert.deepEqual(data.records[0].response, response)
-  await runner.start('a', config, ['person'])
-  await runner.jobs.get('a')?.promise
+  await assert.rejects(runner.start('a', config, ['person']), /没有无邀约记录的达人/)
   assert.equal(sends, 1)
-  assert.equal(data.tasks.a.skipped, 1)
   assert.equal(errors.length, 1)
   assert.equal(errors[0].accountId, 'a')
   assert.equal(errors[0].platform, 'douyin')
   assert.equal(errors[0].level, 'error')
-  assert.deepEqual(data.tasks.a.logs, [])
 })
 
 test('stopping collection retains the first persisted batch and never sends', async () => {
@@ -288,7 +323,7 @@ test('stopping collection retains the first persisted batch and never sends', as
   runner = new InviteRunner({
     data,
     ...persistence(data, async () => {
-      if (data.talents.length && data.tasks.a.status === 'running')
+      if (data.talents.length && data.tasks['a:collect'].status === 'running')
         await runner.stop('a')
     }),
     emit: () => {},
@@ -313,11 +348,11 @@ test('stopping collection retains the first persisted batch and never sends', as
     }),
   })
   await runner.collect('a')
-  await runner.jobs.get('a').promise
+  await runner.jobs.get('a:collect').promise
   assert.equal(requests, 1)
-  assert.equal(data.tasks.a.status, 'stopped')
-  assert.equal(data.tasks.a.collected, 1)
-  assert.deepEqual(data.tasks.a.logs, [])
+  assert.equal(data.tasks['a:collect'].status, 'stopped')
+  assert.equal(data.tasks['a:collect'].collected, 1)
+  assert.deepEqual(data.tasks['a:collect'].logs, [])
   assert.equal(data.collections[0].count, 1)
   assert.equal(data.talents[0].id, 'person')
   assert.equal(data.records.length, 0)
@@ -361,15 +396,15 @@ test('account B rejects account A talents and sends only its own selected talent
   })
   await assert.rejects(runner.start('b', config, ['person']), /当前账号/)
   assert.equal(sends.length, 0)
-  assert.equal(runner.jobs.has('b'), false)
+  assert.equal(runner.jobs.has('b:invite'), false)
   data.talents.push({ ...talent, sourceAccountId: 'b', uid: '3' })
   await runner.start('b', config, ['person'])
-  await runner.jobs.get('b').promise
+  await runner.jobs.get('b:invite').promise
   assert.deepEqual(sends, ['3'])
   assert.equal(data.records[0].accountId, 'b')
   assert.equal(data.records[0].status, 'success')
-  assert.equal(data.tasks.b.kind, 'invite')
-  assert.equal(data.tasks.b.total, 1)
+  assert.equal(data.tasks['b:invite'].kind, 'invite')
+  assert.equal(data.tasks['b:invite'].total, 1)
   assert.equal(data.talents.length, 4)
 })
 
@@ -406,12 +441,12 @@ test('collection errors retain the saved batch and the specific response in erro
     }),
   })
   await runner.collect('a')
-  await runner.jobs.get('a').promise
+  await runner.jobs.get('a:collect').promise
   assert.equal(data.talents.length, 1)
-  assert.equal(data.tasks.a.status, 'stopped')
-  assert.equal(data.tasks.a.logs.length, 1)
-  assert.deepEqual(data.tasks.a.logs[0].response, response)
-  assert.equal(data.tasks.a.logs[0].level, 'error')
+  assert.equal(data.tasks['a:collect'].status, 'stopped')
+  assert.equal(data.tasks['a:collect'].logs.length, 1)
+  assert.deepEqual(data.tasks['a:collect'].logs[0].response, response)
+  assert.equal(data.tasks['a:collect'].logs[0].level, 'error')
   assert.equal(data.records.length, 0)
 })
 
@@ -437,14 +472,14 @@ test('a failed initial save releases the account and reports the cause before an
   })
   await assert.rejects(runner.collect('a'), /ENOSPC/)
   assert.equal(calls, 0)
-  assert.equal(runner.jobs.has('a'), false)
-  assert.equal(data.tasks.a.status, 'stopped')
-  assert.match(data.tasks.a.logs[0].message, /保存失败.*ENOSPC/)
+  assert.equal(runner.jobs.has('a:collect'), false)
+  assert.equal(data.tasks['a:collect'].status, 'stopped')
+  assert.match(data.tasks['a:collect'].logs[0].message, /保存失败.*ENOSPC/)
   writable = true
   await runner.collect('a')
-  await runner.jobs.get('a').promise
+  await runner.jobs.get('a:collect').promise
   assert.equal(calls, 1)
-  assert.equal(data.tasks.a.status, 'done')
+  assert.equal(data.tasks['a:collect'].status, 'done')
 })
 
 test('a background final-save failure is visible and releases the task instead of rejecting unobserved', async () => {
@@ -466,9 +501,9 @@ test('a background final-save failure is visible and releases the task instead o
     }),
   })
   await runner.collect('a')
-  await runner.jobs.get('a').promise
-  assert.equal(runner.jobs.has('a'), false)
-  assert.equal(data.tasks.a.status, 'stopped')
+  await runner.jobs.get('a:collect').promise
+  assert.equal(runner.jobs.has('a:collect'), false)
+  assert.equal(data.tasks['a:collect'].status, 'stopped')
   assert.match(errors[0].message, /EACCES/)
   assert.equal(errors[0].level, 'error')
 })

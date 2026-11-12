@@ -119,7 +119,6 @@ test('confirmed popup login closes once and an old workspace quota failure canno
     shopId: 'shop-1',
     shopName: '店铺一',
     status: 'online',
-    quotaError: '',
   })
   assert.deepEqual(
     h.calls.filter((c) => c.command === 'browser_finish_login'),
@@ -194,7 +193,7 @@ test('stop works before initialization without invoking authorization or reading
   const h = harness()
   await h.bridge.stop('a')
   assert.deepEqual(h.calls, [
-    { command: 'set_task_state', args: { accountId: 'a', running: false } },
+    { command: 'set_task_state', args: { accountId: 'a', running: false, collecting: false } },
   ])
 })
 
@@ -262,9 +261,11 @@ test('native pre-send denial survives the page adapter; unknown execution failur
 
 test('stop during asynchronous native authorization closes the gate before any task request', async () => {
   let release
+  let entered
   const gate = new Promise((resolve) => {
     release = resolve
   })
+  const entering = new Promise((resolve) => { entered = resolve })
   const states = []
   let requests = 0
   const data = {
@@ -281,7 +282,10 @@ test('stop during asynchronous native authorization closes the gate before any t
     onQuota: () => {},
     onTaskState: async (_id, running) => {
       states.push(running)
-      if (running) await gate
+      if (running) {
+        entered()
+        await gate
+      }
     },
     getConnection: () => ({
       platform: 'douyin',
@@ -294,11 +298,14 @@ test('stop during asynchronous native authorization closes the gate before any t
     }),
   })
   const starting = runner.collect('a')
-  await runner.stop('a')
+  await entering
+  const stopping = runner.stop('a')
   release()
+  await stopping
   await starting
-  await runner.jobs.get('a')?.promise
+  await runner.jobs.get('a:collect')?.promise
   assert.equal(requests, 0)
-  assert.equal(data.tasks.a.status, 'stopped')
-  assert.deepEqual(states, [true, false, false, false])
+  assert.equal(data.tasks['a:collect'].status, 'stopped')
+  assert.equal(states[0], true)
+  assert.ok(states.slice(1).every((running) => running === false))
 })

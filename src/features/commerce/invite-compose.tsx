@@ -12,7 +12,7 @@
  * response decides platform limits; cached quota never gates this form. Login/readiness
  * and in-progress controls must reflect the selected sender; changing the form must
  * not mutate an already-started job snapshot. Invitation intervals start at 2000 ms
- * for Kuaishou and 500 ms for Douyin; the workspace applies this floor when opening.
+ * for Kuaishou and 5000 ms for Douyin; the workspace applies this floor when opening.
  */
 
 import { useState } from 'react'
@@ -54,8 +54,8 @@ export function InviteCompose({
   onStarted: () => void
 }) {
   const account = useCommerce((s) => s.accounts.find((a) => a.id === accountId))
-  const config = useCommerce((s) => s.configs[accountId] || defaults)
-  const minimumInterval = platform === 'kuaishou' ? 2000 : 500
+  const minimumInterval = platform === 'kuaishou' ? 2000 : 5000
+  const config = useCommerce((s) => s.configs[accountId]) || { ...defaults, interval: minimumInterval }
   const saveConfig = useCommerce((s) => s.saveConfig)
   const pageState = useGuestState((s) => s.sessions[accountId])
   const pageReady = !desktop || pageState?.status === 'ready'

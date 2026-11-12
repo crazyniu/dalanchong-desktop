@@ -1,7 +1,8 @@
 //! AI module map
 //! Purpose: keep online licensing authoritative in the native process.
-//! Entry: monitor verifies saved codes; license_state reads display state;
+//! Entry: monitor and explicit license_verify verify saved codes; license_state reads display state;
 //! license_activate binds a user-entered code; require_valid reads the latest native result.
+//! license_saved_code returns the saved code only to the trusted main activation form.
 //! Flow: read only the activation code from license-tauri.json, derive device identity
 //! through device.rs, call the HTTPS service, and emit license state to the main UI.
 //! State: monitor verifies once at startup and every 600 seconds, including after failure.
@@ -12,7 +13,7 @@
 //! Invariants: the server owns validity/expiry and one-code/one-device binding. Never
 //! activate as a verification fallback, trust persisted validity, or accept a client-supplied
 //! device ID. Failed replacement codes preserve the previous code. Cleanup can still run
-//! after expiry. UI state must never expose the stored activation code.
+//! after expiry. State snapshots and events never expose the stored activation code.
 
 use serde_json::{json, Value};
 use std::{error::Error, path::PathBuf, sync::Mutex as StateMutex, time::Duration};
@@ -245,7 +246,7 @@ impl LicenseService {
     }
 }
 
-/// Read only the latest monitor/activation result; never query the service from a business operation.
+/// Read only the latest monitor/explicit verification/activation result; never query from a business operation.
 pub fn require_valid(app: &AppHandle) -> Result<(), String> {
     let service = app.state::<License>();
     let result = service.state.lock().unwrap();
@@ -256,7 +257,8 @@ pub fn require_valid(app: &AppHandle) -> Result<(), String> {
     }
 }
 
-/// Own all verification requests, including startup and recovery after a failed check.
+/// Own startup/periodic verification and recovery after a failed check. Explicit
+/// user verification shares the service mutex without changing this schedule.
 pub async fn monitor(app: AppHandle) {
     let mut interval = tokio::time::interval(MONITOR_INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -272,6 +274,34 @@ pub fn license_state(app: AppHandle, webview: Webview) -> Result<Value, String> 
     crate::require_main(&webview)?;
     let service = app.state::<License>();
     let state = service.state.lock().unwrap().clone();
+    Ok(state)
+}
+
+/// The activation form reads its saved input without waiting for the service's
+/// network mutex. The fixed local file is read only; no code enters state/events/diagnostics.
+#[tauri::command]
+pub async fn license_saved_code(app: AppHandle, webview: Webview) -> Result<String, String> {
+    crate::require_main(&webview)?;
+    let file = crate::data_dir(&app).join("license-tauri.json");
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = match std::fs::read(file) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+            Err(error) => return Err(format!("读取已保存激活码失败：{error}")),
+        };
+        let saved: Value = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("读取已保存激活码失败：{error}"))?;
+        Ok(saved["code"].as_str().unwrap_or("").to_owned())
+    }).await.map_err(|error| error.to_string())?
+}
+
+/// Verify only the locally saved code with the native device identity. This is
+/// an explicit user action, not activation or an automatic retry after failure.
+#[tauri::command]
+pub async fn license_verify(app: AppHandle, webview: Webview) -> Result<Value, String> {
+    crate::require_main(&webview)?;
+    let service = app.state::<License>();
+    let state = service.service.lock().await.verify(&app).await;
     Ok(state)
 }
 

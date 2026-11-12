@@ -1,0 +1,21 @@
+<!doctype html>
+<!--
+AI file map
+Purpose: extension-origin player frame displayed in a source webpage's center.
+Entry: preview-background.js supplies a stored media ID, preview nonce and parent origin.
+Flow: preview.js loads the record and uses player.js without opening a native dialog.
+Boundary: this document exposes no extension operations to the parent webpage.
+-->
+<html lang="zh-CN" class="wa-light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>视频预览 · 大懒虫</title>
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="player.css">
+  <link rel="stylesheet" href="preview.css">
+</head>
+<body>
+  <script type="module" src="preview.js"></script>
+</body>
+</html>

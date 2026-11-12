@@ -52,7 +52,7 @@ fn migration_preserves_history_and_recovers_interrupted_sends() {
         "tasks":{
             "account-a":{"accountId":"account-a","startedAt":"task-a","kind":"collect",
                 "logs":[task_log,task_log]},
-            "removed":{"accountId":"removed","startedAt":"task-removed"}},
+            "removed":{"accountId":"removed","startedAt":"task-removed","kind":"collect"}},
         "logs":[global_a]});
     fixture.write("runtime.json", &runtime);
     fixture.write("errors.ndjson", &global_b);
@@ -61,10 +61,10 @@ fn migration_preserves_history_and_recovers_interrupted_sends() {
         let ids = query(&db, &json!({"kind":"talent_ids","platform":"kuaishou","accountId":"account-a"})).unwrap();
         assert_eq!(ids, json!(["historical-b","historical-a"]));
         let state = load(&mut db).unwrap();
-        let logs = state["tasks"]["account-a"]["logs"].as_array().unwrap();
+        let logs = state["tasks"]["account-a:collect"]["logs"].as_array().unwrap();
         assert_eq!(logs.len(), 2);
         assert_eq!(logs.iter().map(|entry| text(entry,"id")).collect::<Vec<_>>(), ["global-a","global-b"]);
-        assert!(state["tasks"].get("removed").is_none());
+        assert!(state["tasks"].get("removed:collect").is_none());
         assert_eq!(db.query_row("SELECT count(*) FROM tasks", [], |row| row.get::<_,i64>(0)).unwrap(), 2);
         let interrupted = query(&db, &json!({"kind":"record","id":"in-flight"})).unwrap();
         assert_eq!(interrupted["status"], "review");
@@ -126,12 +126,12 @@ fn failed_transactions_and_running_task_deletions_preserve_data() {
     assert!(failure.is_err());
     assert_eq!(talent_counts(&db).unwrap(), json!({"account-a":1}));
     assert!(account(&db, "must-rollback").is_err());
-    save(&mut db, &json!({"tasks":{"account-a":{"accountId":"account-a","status":"running"}},
+    save(&mut db, &json!({"tasks":{"account-a:collect":{"accountId":"account-a","kind":"collect","status":"running"}},
         "talents":[talent("keep","account-a"),talent("imported","account-b")]})).unwrap();
     let selection = json!({"kind":"talents","platform":"kuaishou","accountId":"account-a","ids":["imported"]});
     assert!(delete(&mut db, &selection, &HashSet::new()).is_err());
     assert_eq!(talent_counts(&db).unwrap(), json!({"account-a":2,"account-b":1}));
-    save(&mut db, &json!({"tasks":{"account-a":{"accountId":"account-a","status":"stopped"}}})).unwrap();
+    save(&mut db, &json!({"tasks":{"account-a:collect":{"accountId":"account-a","kind":"collect","status":"stopped"}}})).unwrap();
     assert_eq!(delete(&mut db, &selection, &HashSet::new()).unwrap()["count"], 1);
     assert_eq!(talent_counts(&db).unwrap(), json!({"account-a":1,"account-b":1}));
 }

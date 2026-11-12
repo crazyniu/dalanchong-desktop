@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+AI file map
+Purpose: grant V8 and SwiftShader JIT memory to the Chromium Renderer/GPU helpers.
+Entry: chrome_runtime_install.rs applies this only while signing those helper apps.
+Boundary: no debugger, arbitrary-library or unsigned-executable-memory entitlement.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+</dict>
+</plist>

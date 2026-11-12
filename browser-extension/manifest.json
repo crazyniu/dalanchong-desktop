@@ -1,16 +1,14 @@
 {
   "manifest_version": 3,
   "name": "大懒虫",
-  "version": "0.3.4",
-  "description": "抖音视频下载与罗盘、百应批量视频操作。",
+  "version": "0.3.5",
+  "description": "网页视频捕获、批量下载与抖音原画批量解析。",
   "minimum_chrome_version": "116",
   "permissions": [
-    "activeTab",
     "scripting",
     "webRequest",
     "downloads",
     "storage",
-    "offscreen",
     "tabs"
   ],
   "host_permissions": [
@@ -22,8 +20,8 @@
     "type": "module"
   },
   "action": {
-    "default_popup": "popup.html",
     "default_title": "大懒虫",
+    "default_popup": "popup.html",
     "default_icon": {
       "16": "assets/icon-16.png",
       "24": "assets/icon-24.png",
@@ -31,6 +29,18 @@
     }
   },
   "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["capture.js"],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": true
+    },
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["shop-label.js"],
+      "run_at": "document_idle"
+    },
     {
       "matches": [
         "https://compass.jinritemai.com/talent/video-rank*",
@@ -98,27 +108,6 @@
         "https://www.douyin.com/*"
       ],
       "js": [
-        "douyin_content.js"
-      ],
-      "run_at": "document_start",
-      "all_frames": true,
-      "world": "MAIN"
-    },
-    {
-      "matches": [
-        "https://www.douyin.com/*"
-      ],
-      "js": [
-        "douyin.js"
-      ],
-      "run_at": "document_start",
-      "all_frames": true
-    },
-    {
-      "matches": [
-        "https://www.douyin.com/*"
-      ],
-      "js": [
         "page.js"
       ],
       "run_at": "document_start",
@@ -126,66 +115,27 @@
     },
     {
       "matches": [
-        "https://compass.jinritemai.com/talent/video-rank*",
-        "https://compass.jinritemai.com/talent/product-rank*",
-        "https://compass.jinritemai.com/shop/chance/video-rank*",
-        "https://compass.jinritemai.com/shop/chance/video-talent-rank*",
-        "https://compass.jinritemai.com/shop/chance/product-rank*",
-        "https://compass.jinritemai.com/shop/chance/merchandise-product-rank*",
-        "https://compass.jinritemai.com/shop/chance/rank-product*",
-        "https://compass.jinritemai.com/shop/chance/rank-product/detail*",
-        "https://compass.jinritemai.com/shop/chance/live-talent-rank*",
-        "https://compass.jinritemai.com/shop/chance/rank-talent*",
-        "https://compass.jinritemai.com/shop/chance/rank-video*",
-        "https://compass.jinritemai.com/shop/chance/search-rank-product*",
-        "https://compass.jinritemai.com/shop/chance/search-product-rank*",
-        "https://compass.jinritemai.com/shop/chance/rank-video/detail*",
-        "https://compass.jinritemai.com/shop/chance/rank-shop/detail*",
-        "https://compass.jinritemai.com/shop/chance/rank-live/detail*",
-        "https://compass.jinritemai.com/shop/chance/rank-live*",
-        "https://compass.jinritemai.com/shop/chance*",
-        "https://buyin.jinritemai.com/dashboard/merch-picking-library/merch-promoting*",
-        "https://buyin.jinritemai.com/pc/selection/decision/pack_detail*"
+        "https://www.kuaishou.com/*"
       ],
       "js": [
-        "bridge.js"
+        "detail-page.js"
       ],
       "run_at": "document_start",
-      "all_frames": true
+      "world": "MAIN"
     },
     {
       "matches": [
-        "https://compass.jinritemai.com/talent/video-rank*",
-        "https://compass.jinritemai.com/talent/product-rank*",
-        "https://compass.jinritemai.com/shop/chance/video-rank*",
-        "https://compass.jinritemai.com/shop/chance/video-talent-rank*",
-        "https://compass.jinritemai.com/shop/chance/product-rank*",
-        "https://compass.jinritemai.com/shop/chance/merchandise-product-rank*",
-        "https://compass.jinritemai.com/shop/chance/rank-product*",
-        "https://compass.jinritemai.com/shop/chance/rank-product/detail*",
-        "https://compass.jinritemai.com/shop/chance/live-talent-rank*",
-        "https://compass.jinritemai.com/shop/chance/rank-talent*",
-        "https://compass.jinritemai.com/shop/chance/rank-video*",
-        "https://compass.jinritemai.com/shop/chance/search-rank-product*",
-        "https://compass.jinritemai.com/shop/chance/search-product-rank*",
-        "https://compass.jinritemai.com/shop/chance/rank-video/detail*",
-        "https://compass.jinritemai.com/shop/chance/rank-shop/detail*",
-        "https://compass.jinritemai.com/shop/chance/rank-live/detail*",
-        "https://compass.jinritemai.com/shop/chance/rank-live*",
-        "https://compass.jinritemai.com/shop/chance*",
-        "https://buyin.jinritemai.com/dashboard/merch-picking-library/merch-promoting*",
-        "https://buyin.jinritemai.com/pc/selection/decision/pack_detail*"
+        "https://www.douyin.com/*",
+        "https://www.kuaishou.com/*"
       ],
       "js": [
-        "capture.js"
+        "detail-buttons.js"
       ],
-      "run_at": "document_start",
-      "world": "MAIN",
-      "all_frames": true
+      "run_at": "document_idle"
     }
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+    "extension_pages": "script-src 'self'; object-src 'self'"
   },
   "icons": {
     "16": "assets/icon-16.png",
@@ -194,6 +144,10 @@
     "128": "assets/icon-128.png"
   },
   "web_accessible_resources": [
+    {
+      "resources": ["preview.html"],
+      "matches": ["http://*/*", "https://*/*"]
+    },
     {
       "resources": [
         "assets/icon-48.png"

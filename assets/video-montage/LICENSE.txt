@@ -1,0 +1,7 @@
+Twemoji graphics by Twitter, Inc and other contributors.
+Copyright Twitter, Inc and other contributors.
+Licensed under Creative Commons Attribution 4.0 International (CC BY 4.0).
+License: https://creativecommons.org/licenses/by/4.0/
+Source: https://github.com/twitter/twemoji/tree/v14.0.2/assets/72x72
+Used assets: 1f42d.png, 2728.png, 1f31f.png.
+Video usage scales graphics, feathers their edges, and applies alpha transparency.

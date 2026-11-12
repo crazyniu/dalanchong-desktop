@@ -141,11 +141,11 @@ test('actual injected SDK failure is beforeSend and never calls fetch', async ()
       executeJavaScript: (script) =>
         vm.runInNewContext(script, {
           window: {
-            webpackChunkmain: {
+            webpackChunkmain: Object.assign([], {
               push() {
                 throw Error('SDK not ready')
               },
-            },
+            }),
           },
           crypto: { randomUUID: () => 'test' },
           fetch() {

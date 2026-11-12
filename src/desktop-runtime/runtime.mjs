@@ -10,7 +10,10 @@
  * or used to gate invitation startup. Observations are dated and cleared after a send,
  * identity loss/change, or quota failure. The send response owns invitation-limit decisions.
  * makeApi routes actual requests through platform_eval. License verification belongs
- * only to the native ten-minute monitor; UI operations read its latest result.
+ * to the native ten-minute monitor or an explicit user verification action;
+ * ordinary UI/business operations read the latest result without querying.
+ * Saved activation input is read only through its dedicated main-only command,
+ * never copied into runtime snapshots, events or diagnostics.
  * State: per-account connections/preparations, replayed UI events, save/log promise chains,
  * and license/update flags live in this closure rather than in remote WebViews.
  * Runtime events contain changed domains only; task events carry one account/kind task.
@@ -652,6 +655,15 @@ export function createRuntime(
         // A monitor event received during this read is newer than the IPC snapshot.
         const latest = replay.get('license')
         if (latest !== previous) return latest.state
+        licenseValid = state.valid
+        send({ type: 'license', state })
+        return state
+      }),
+    getSavedLicenseCode: () =>
+      action('读取激活码失败', () => call('license_saved_code')),
+    verifyLicense: () =>
+      action('重新验证失败', async () => {
+        const state = await call('license_verify')
         licenseValid = state.valid
         send({ type: 'license', state })
         return state

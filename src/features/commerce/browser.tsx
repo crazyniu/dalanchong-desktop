@@ -10,9 +10,11 @@
  * State: the local browser store tracks active/visited accounts, bounds, prepared attempts,
  * and overlay payloads; preparations coalesces concurrent invitation account setup.
  * Removed accounts release these presentation caches. Invitation overlay snapshots
- * project display counters/current text, without task diagnostics or filter payloads.
- * Global invitation feedback includes both platforms and persists above dialogs and
- * routes with a stable native presentation key; collection feedback follows the account.
+ * project display counters/current text/retry deadline, without diagnostics or filters.
+ * Each progress view renders countdown ticks locally without repeating native IPC.
+ * Global invitation and browser-install feedback persists above dialogs and
+ * routes with a stable native presentation key; collection feedback follows the account
+ * and is visible only while its collection task is running.
  * Task snapshots are keyed by account and kind; progress actions stop invitations only.
  * Invariants: native WebViews paint above DOM. Covering surfaces retain an in-memory image
  * of the visible page before hiding it, then restore the native page when they close.
@@ -53,6 +55,7 @@ import {
   type TaskOverlayContent,
 } from './invite-progress'
 import { stopDemo, useCommerce } from './store'
+import { dismissBrowserInstall, useShopBrowser, type BrowserInstallState } from './shop-browser'
 
 type Bounds = { left: number; top: number; width: number; height: number }
 export type NativeToolbarState = ToolbarState
@@ -152,7 +155,8 @@ function useNativeInviteProgress(
             entry.task.skipped === next.task.skipped &&
             entry.task.failed === next.task.failed &&
             entry.task.review === next.task.review &&
-            entry.task.current === next.task.current
+            entry.task.current === next.task.current &&
+            entry.task.retryAt === next.task.retryAt
         })) return
     useBrowser.setState({
       inviteProgress: state && {
@@ -169,6 +173,7 @@ function useNativeInviteProgress(
             failed: task.failed,
             review: task.review,
             current: task.current,
+            retryAt: task.retryAt,
           },
         })),
       },
@@ -411,40 +416,43 @@ let lastOverlay: {
   accountId?: string
   bounds?: Bounds
   content: Task | InviteProgressState | null
+  browserInstall: BrowserInstallState | null
 } | undefined
 let lastToolbar: { bounds?: Bounds; state: NativeToolbarState | null } | undefined
 
 async function syncTaskOverlay(accountId?: string, bounds?: Bounds) {
   const { inviteProgress, viewport } = useBrowser.getState()
+  const browserInstall = useShopBrowser.getState().install
   const task = accountId ? useCommerce.getState().tasks[`${accountId}:collect`] : undefined
-  const collection = task?.kind === 'collect' &&
-    (task.status === 'running' || Boolean(task.activity?.length) ||
-      Boolean(task.logs?.some((entry) => entry.level === 'error')))
+  const collection = task?.kind === 'collect' && task.status === 'running'
   const overlay: TaskOverlayContent | null = inviteProgress && viewport
-    ? { kind: 'invite', ...inviteProgress }
-    : collection ? { kind: 'collect', task } : null
+    ? { kind: 'invite', ...inviteProgress, browserInstall }
+    : collection ? { kind: 'collect', task, browserInstall }
+      : browserInstall && viewport ? { kind: 'browser-install', state: browserInstall } : null
   // Invitation identity and geometry belong to the window, not the selected account.
   // Keeping this key stable avoids hiding the native card across routes and dialogs.
-  const overlayAccount = overlay?.kind === 'invite'
-    ? 'invite-progress'
+  const globalProgress = Boolean((inviteProgress || browserInstall) && viewport)
+  const overlayAccount = globalProgress
+    ? 'global-progress'
     : overlay ? accountId : undefined
   // Keep the card at the window's bottom right across dialogs and toolbar drags.
   // The native card adds a 16px inset to the 88px bottom toolbar clearance.
-  const overlayBounds = overlay?.kind === 'invite' && viewport
+  const overlayBounds = globalProgress && viewport
     ? { ...viewport, height: viewport.height - 88 }
     : overlay && bounds ? { ...bounds, height: bounds.height - 88 } : undefined
   const content = overlay?.kind === 'invite'
     ? inviteProgress
     : overlay?.kind === 'collect' ? overlay.task : null
   if (!lastOverlay || lastOverlay.accountId !== overlayAccount ||
-      !shallow(lastOverlay.bounds, overlayBounds) || lastOverlay.content !== content || overlayNeedsRaise) {
+      !shallow(lastOverlay.bounds, overlayBounds) || lastOverlay.content !== content ||
+      lastOverlay.browserInstall !== browserInstall || overlayNeedsRaise) {
     await invoke('overlay_sync', {
       accountId: overlayAccount ?? null,
       bounds: overlayBounds ?? null,
       task: overlay,
       raise: overlayNeedsRaise,
     })
-    lastOverlay = { accountId: overlayAccount, bounds: overlayBounds, content }
+    lastOverlay = { accountId: overlayAccount, bounds: overlayBounds, content, browserInstall }
     overlayNeedsRaise = false
   }
 }
@@ -600,10 +608,21 @@ const coveringLayers = [
 
 export function BrowserLayer() {
   const state = useBrowser()
+  const browserInstall = useShopBrowser((s) => s.install)
   const accounts = useCommerce((s) => s.accounts)
   const task = useCommerce((s) => s.tasks[`${state.active}:collect`])
   const session = useGuestState((s) => s.sessions[state.active])
   const attempt = useGuestState((s) => s.attempts[state.active] || 0)
+  useEffect(() => {
+    if (!desktop) return
+    const subscription = listen<{ action: { type: string } }>(
+      'assistant:browser-install-action',
+      ({ payload }) => {
+        if (payload.action.type === 'dismiss-browser-install') dismissBrowserInstall()
+      }
+    )
+    return () => { void subscription.then((unsubscribe) => unsubscribe()) }
+  }, [])
   useEffect(() => {
     const accountIds = new Set(accounts.map((account) => account.id))
     // Native account removal owns the actual WebView. Drop its presentation caches
@@ -706,6 +725,7 @@ export function BrowserLayer() {
     state.prepared,
     state.toolbar,
     state.inviteProgress,
+    browserInstall,
     accounts,
     session?.status,
     attempt,

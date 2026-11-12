@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "icon": [
+      "../assets/icons/app.iconset/icon_256x256.png",
+      "../assets/icons/app.icns"
+    ]
+  }
+}

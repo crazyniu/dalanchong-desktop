@@ -1,17 +1,29 @@
 /**
  * AI module map
  * Purpose: pure source eligibility, media identity, size, deduplication, and work-grouping rules.
- * Entry: library.js, popup.js, manager.js, and ui.js use the exported helpers.
+ * Entry: library.js, manager.js, and ui.js use the exported helpers.
  * Flow: URLs and capture metadata become stable media identities, preferred records, and per-work format groups using platforms.js recognition.
  * Invariants: selected signed-CDN query fields do not split one media identity; better metadata and verified sizes survive duplicate captures while fresh URLs remain usable.
- * Boundary: excludes unsupported source hosts and segment-derived sizes as encoded here; owns no network, storage, or browser lifecycle.
+ * Boundary: capture accepts every HTTP(S) source webpage and video CDN hostname.
+ * Commerce panels retain their narrower routes. Owns no network, storage, or browser lifecycle.
  */
 import {videoPage} from './platforms.js';
 
+export const capturePagePatterns = ['http://*/*', 'https://*/*'];
+
 export function canCaptureSource(value) {
+  return /^https?:\/\//.test(value);
+}
+
+// A shared media file can belong to several tabs while retaining one library ID.
+export function mediaTabIds(item) {
+  return item.sourceTabIds || (Number.isInteger(item.sourceTabId) ? [item.sourceTabId] : []);
+}
+
+export function canCaptureCommerceSource(value) {
   if (!/^https:\/\//.test(value)) return false;
   const url = new URL(value);
-  return Boolean(videoPage(value)) ||
+  return ['www.douyin.com', 'www.kuaishou.com'].includes(url.hostname) ||
     (url.hostname === 'compass.jinritemai.com' && /^\/(talent\/(video-rank|product-rank)|shop\/chance)/.test(url.pathname)) ||
     (url.hostname === 'buyin.jinritemai.com' && /^\/(dashboard\/merch-picking-library\/merch-promoting|pc\/selection\/decision\/pack_detail)/.test(url.pathname));
 }
@@ -28,8 +40,7 @@ export function mediaIdentity(value) {
   return url.href;
 }
 
-export function mediaSize(status, header, kind) {
-  if (kind === 'hls') return 0;
+export function mediaSize(status, header) {
   const total = header('content-range').match(/\/(\d+)$/)?.[1];
   if (total) return Number(total);
   return status === 200 && !header('content-encoding') ? Number(header('content-length')) || 0 : 0;
@@ -55,13 +66,19 @@ export function uniqueMedia(records) {
 }
 
 export function videoGroupKey(item) {
+  // Network observations can include preloaded recommendations from the same page.
+  // Without work metadata, each media address represents its own captured video.
+  if (item.quality === '网页视频') return mediaIdentity(item.url);
   const page = videoPage(item.sourceUrl);
-  return page ? `${page.platform}:${page.id}` : mediaIdentity(item.url);
+  if (page) return `${page.platform}:${page.id}`;
+  const source = new URL(item.sourceUrl);
+  const kuaishouId = source.hostname === 'www.kuaishou.com' && source.pathname.match(/^\/short-video\/([^/]+)\/?$/)?.[1];
+  return kuaishouId ? `kuaishou:${kuaishouId}` : mediaIdentity(item.url);
 }
 
 export function videoGroups(items) {
   const groups = new Map();
-  const qualityScore = item => item.quality === '高清 MP4' ? 3 : item.quality === '原片候选' ? 2 : item.quality !== '网页视频' ? 1 : 0;
+  const qualityScore = item => item.quality === '原片候选' ? 2 : 1;
   for (const item of items) {
     const key = videoGroupKey(item);
     if (!groups.has(key)) groups.set(key, {key, formats: []});

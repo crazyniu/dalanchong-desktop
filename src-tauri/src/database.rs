@@ -8,7 +8,8 @@
 //! preserves talent primary keys; only new collection writes reconcile rows by UID.
 //! Global diagnostic IDs survive matching task-log copies, which add missing task links.
 //! Task summaries use (account_id, kind); startup returns account:kind keys so collection
-//! and invitation progress coexist. Task log windows also match kind and start time.
+//! and invitation progress coexist. Task error windows match kind and start time;
+//! collection activity stays session-only and is not restored from durable logs.
 //! State: assistant.sqlite3 is authoritative; writes use WAL/FULL transactions under
 //! storage's operation lock. Streaming exports use their own read connection.
 //! Batched writes reuse prepared statements; pages fetch talents and latest invitations
@@ -327,14 +328,12 @@ pub fn load(db: &mut Connection) -> Result<Value> {
     }
     let mut tasks = Map::new();
     // Removed accounts retain their history in SQLite, but do not load dormant
-    // task summaries or their per-task activity/error windows on every startup.
+    // task summaries or their per-task error windows on every startup.
     for mut task in rows(db,"SELECT payload FROM tasks WHERE account_id IN (SELECT json_extract(a.value,'$.id') FROM metadata m,json_each(m.payload) a WHERE m.key='accounts')", &[])? {
         let values = [SqlValue::Text(text(&task,"accountId").into()),SqlValue::Text(text(&task,"startedAt").into()),SqlValue::Text(text(&task,"kind").into())];
-        let mut activity = rows(db,"SELECT payload FROM logs WHERE account_id=?1 AND task_id=?2 AND json_extract(payload,'$.kind')=?3 AND level<>'error' ORDER BY time DESC,seq DESC LIMIT 200", &values)?;
-        activity.reverse();
         let mut logs = rows(db,"SELECT payload FROM logs WHERE account_id=?1 AND task_id=?2 AND json_extract(payload,'$.kind')=?3 AND level='error' ORDER BY time DESC,seq DESC LIMIT 200", &values)?;
         logs.reverse();
-        task["activity"] = json!(activity);
+        task["activity"] = json!([]);
         task["logs"] = json!(logs);
         tasks.insert(format!("{}:{}",text(&task,"accountId"),text(&task,"kind")),task);
     }

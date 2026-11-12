@@ -1,9 +1,0 @@
-<!doctype html>
-<!--
-AI file map
-Purpose: hidden extension document hosting the persistent download executor.
-Entry: library.js creates this document through chrome.offscreen; offscreen.js is its module entry.
-Flow: runtime messages drive downloads, local muxing, and output-URL management without a visible interface.
-Boundary: keep the module entry intact; queue state and cleanup belong to offscreen.js, not page markup.
--->
-<html><head><meta charset="UTF-8"><title>视频下载任务</title></head><body><script type="module" src="offscreen.js"></script></body></html>

@@ -1,12 +1,15 @@
 //! AI module map
-//! Purpose: supply this project's video extension to isolated Google Chrome accounts.
+//! Purpose: supply this project's video extension to isolated dedicated Chromium accounts.
 //! Entry: chrome::open calls prepare and pin under its operation lock before a cold launch.
 //! Flow: development reads the maintained extension directory directly; packaged builds
-//! copy the bundled source into a stable app-data path when its source fingerprint changes.
+//! copy the bundled, minified runtime into a stable app-data path when its fingerprint changes.
 //! scripts/prepare-video-extension.mjs owns that fingerprint and the bundled resource names.
+//! fingerprint identifies the source loaded in each browser; changed source must reload
+//! the existing extension instead of mixing new content scripts with an old worker.
 //! Ownership: this directory contains replaceable extension code only. Chrome owns each
-//! account's extension history and tasks inside its separate chrome-profiles profile.
-//! pin merges the toolbar ID and bookmark-bar visibility into closed-profile Preferences;
+//! account's extension history and tasks inside its separate chromium-profiles profile.
+//! pin enables developer mode for the app-owned unpacked extension, and merges the
+//! toolbar ID and bookmark-bar visibility into closed-profile Preferences;
 //! it returns the video-list URL for chrome.rs to add to the account's bookmarks.
 //! The bookmark opens the extension's Douyin video manager.
 //! Invariants: keep the installed path stable because this manifest has no public key.
@@ -54,8 +57,51 @@ pub fn prepare(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(directory)
 }
 
+/// Release resources already carry a content hash. Development reads executable
+/// extension resources so edits are detected even when the app version is unchanged.
+pub fn fingerprint(extension: &Path) -> Result<String, String> {
+    #[cfg(not(debug_assertions))]
+    return fs::read_to_string(extension.join(".bundle-sha256")).map_err(|e| e.to_string());
+    #[cfg(debug_assertions)]
+    {
+        fn hash_directory(directory: &Path, hash: &mut Sha256) -> std::io::Result<()> {
+            use std::io::Read;
+            let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries {
+                let name = entry.file_name();
+                if name.to_string_lossy().starts_with('.') { continue; }
+                let path = entry.path();
+                if entry.file_type()?.is_dir() {
+                    hash.update(name.to_string_lossy().as_bytes());
+                    hash.update(b"/");
+                    hash_directory(&path, hash)?;
+                    hash.update(b"\0");
+                } else if matches!(path.extension().and_then(|ext| ext.to_str()),
+                    Some("js" | "json" | "html" | "css" | "wasm")) {
+                    hash.update(name.to_string_lossy().as_bytes());
+                    hash.update(b"\0");
+                    let mut file = fs::File::open(path)?;
+                    let mut buffer = [0u8; 65536];
+                    loop {
+                        let count = file.read(&mut buffer)?;
+                        if count == 0 { break; }
+                        hash.update(&buffer[..count]);
+                    }
+                    hash.update(b"\0");
+                }
+            }
+            Ok(())
+        }
+        let mut hash = Sha256::new();
+        hash_directory(extension, &mut hash).map_err(|e| e.to_string())?;
+        Ok(format!("{:x}", hash.finalize()))
+    }
+}
+
 /// The caller owns the cold-launch lock and has already created Default/Preferences.
-/// Keep existing toolbar pins and unrelated settings; write only when an entry changes.
+/// Enable unpacked extensions in this managed profile and retain existing toolbar pins.
+/// This never changes developer mode in the user's personal Chrome profile.
 pub fn pin(profile: &Path, extension: &Path) -> Result<String, String> {
     let id = extension_id(extension)?;
     let home_url = format!("chrome-extension://{id}/manager.html#videos");
@@ -78,6 +124,12 @@ pub fn pin(profile: &Path, extension: &Path) -> Result<String, String> {
         .ok_or("浏览器固定扩展配置格式无效")?;
     if !pinned.iter().any(|entry| entry.as_str() == Some(id.as_str())) {
         pinned.push(Value::String(id));
+        changed = true;
+    }
+    let ui = extensions.entry("ui").or_insert_with(|| json!({}))
+        .as_object_mut().ok_or("浏览器扩展界面配置格式无效")?;
+    if ui.get("developer_mode") != Some(&Value::Bool(true)) {
+        ui.insert("developer_mode".into(), json!(true));
         changed = true;
     }
     let bookmark_bar = root

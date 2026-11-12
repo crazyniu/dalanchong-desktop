@@ -1,16 +1,17 @@
 /**
  * AI module map
- * Purpose: shared preview dialog and playback controller for popup.js and manager.js.
- * Entry: createPlayer accepts caller refresh, bounds, and fullscreen options and returns the preview controls.
- * Flow: selected media loads through the video element or the local Hls implementation, imported only for HLS preview; player.css receives aspect and state updates.
- * State: each player owns its dialog, media/HLS instance, playback controls, and preview revision; hiding invalidates pending imports and resets playback resources.
+ * Purpose: shared centered preview player for the manager and webpage preview frame.
+ * Entry: createPlayer accepts refresh, bounds, fullscreen, embedded and onClose options; returns {open}.
+ * Flow: a fixed 9:16 surface fits the available viewport before metadata loads;
+ * the native video retains its complete picture through object-fit: contain.
+ * State: each player owns its dialog, media instance, playback controls, and preview revision; hiding resets playback resources and invalidates pending source refreshes.
  * Boundary: callers own source refresh and media selection; preview does not enqueue or
  * save downloads. Only the explicit close button dismisses the dialog, never Escape/backdrop.
+ * Embedded frames use a plain panel so opening a webpage preview never requests focus.
  */
 import {$, qualityText, sizeText, toast} from './ui.js';
 
 const markup = `
-  <wa-dialog id="video-preview" label="视频预览" class="preview-dialog">
     <div id="player" class="player" data-paused="true">
       <video id="preview-video" playsinline preload="metadata" aria-label="预览视频"></video>
       <button id="preview-big-play" class="player-big-play" type="button" tabindex="-1" aria-hidden="true"><wa-icon name="play"></wa-icon></button>
@@ -32,18 +33,30 @@ const markup = `
       <a id="preview-source" class="btn sm outline" target="_blank" rel="noreferrer">打开来源<wa-icon name="external-link"></wa-icon></a>
       <button class="btn outline" type="button" data-dialog="close">关闭</button>
     </div>
-  </wa-dialog>`;
+  `;
 
 const timeText = seconds => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 const setButton = (button, label, name) => { button.title = label; button.setAttribute('aria-label', label); button.querySelector('wa-icon').name = name; };
-const defaultBounds = () => ({maxWidth: Math.min(960, innerWidth - 32), maxHeight: Math.min(innerHeight * 0.7, 640), minWidth: 440});
+const defaultBounds = () => ({maxWidth: Math.min(480, innerWidth - 32), maxHeight: Math.max(0, innerHeight - 208)});
 
-// Video preview dialog shared by the popup and the batch download page.
+// Video preview shared by the webpage frame and batch download page.
 // onRefresh(item, show) resolves an expired address again and calls show(freshItem); without it the refresh button stays hidden.
-export function createPlayer({onRefresh, bounds = defaultBounds, fullscreen = true} = {}) {
-  document.body.insertAdjacentHTML('beforeend', markup);
-  const dialog = $('video-preview'), player = $('player'), video = $('preview-video');
-  let hls, current, revision = 0;
+// Embedded mode shares controls but avoids native dialog focus changes.
+export function createPlayer({onRefresh, onClose, bounds = defaultBounds, fullscreen = true, embedded = false} = {}) {
+  const dialog = document.createElement(embedded ? 'section' : 'wa-dialog');
+  dialog.id = 'video-preview';
+  dialog.className = 'preview-dialog';
+  dialog.setAttribute('label', '视频预览');
+  if (embedded) {
+    dialog.hidden = true;
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-labelledby', 'preview-title');
+  }
+  dialog.innerHTML = (embedded ? '<header class="preview-header"><h2 id="preview-title">视频预览</h2></header>' : '') + markup;
+  document.body.append(dialog);
+  const player = $('player'), video = $('preview-video');
+  let current, revision = 0;
   $('preview-fullscreen').hidden = !fullscreen;
   dialog.addEventListener('wa-hide', event => {
     // Web Awesome identifies Escape/backdrop dismissal with its internal dialog source;
@@ -53,7 +66,12 @@ export function createPlayer({onRefresh, bounds = defaultBounds, fullscreen = tr
 
   const notice = (text, refreshable = false) => { $('preview-notice').textContent = text; $('preview-problem').hidden = !text; $('preview-refresh').hidden = !(refreshable && onRefresh); };
   const toggle = () => { if (video.paused) void play(); else video.pause(); };
-  const play = () => video.play().catch(error => { if (error.name !== 'AbortError') notice('暂时无法播放，可点击播放重试或打开来源网页。'); });
+  const play = async () => {
+    try { await video.play(); }
+    catch (error) {
+      if (error.name !== 'AbortError') notice('暂时无法播放，可点击播放重试或打开来源网页。');
+    }
+  };
 
   function renderTime() {
     const duration = Number.isFinite(video.duration) ? video.duration : 0;
@@ -67,60 +85,38 @@ export function createPlayer({onRefresh, bounds = defaultBounds, fullscreen = tr
     seek.style.setProperty('--b', `${duration ? Math.min(100, buffered / duration * 100) : 0}%`);
   }
 
-  // Fit the dialog to the video so portrait works fill the height instead of sitting in a wide black box.
+  // The preview surface stays portrait for every source, including before metadata
+  // and after quality changes. Actual video dimensions never change its geometry.
   function fit() {
-    const {videoWidth: width, videoHeight: height} = video;
-    if (!width || !height || document.fullscreenElement) return;
-    const aspect = width / height;
-    const {maxWidth, maxHeight, minWidth} = bounds();
-    let playerWidth = maxHeight * aspect, playerHeight = maxHeight;
-    if (playerWidth > maxWidth) { playerWidth = maxWidth; playerHeight = maxWidth / aspect; }
-    dialog.style.setProperty('--width', `${Math.round(Math.max(playerWidth, Math.min(minWidth, maxWidth)))}px`);
-    player.style.setProperty('--player-h', `${Math.round(playerHeight)}px`);
+    if (document.fullscreenElement) return;
+    const {maxWidth, maxHeight} = bounds();
+    dialog.style.setProperty('--width', `${Math.min(maxWidth, maxHeight * 9 / 16)}px`);
   }
 
   function reset() {
     revision++;
     video.pause();
-    if (hls) { hls.destroy(); hls = null; }
     video.removeAttribute('src');
     video.load();
     $('preview-loading').hidden = true;
     dialog.style.removeProperty('--width');
-    player.style.removeProperty('--player-h');
     renderTime();
   }
 
-  function open(item) {
+  async function open(item) {
     current = item;
     reset();
-    notice(item.videoOnly ? '此画质只有画面，下载时会自动合并音轨。' : '');
+    notice('');
     $('preview-loading').hidden = false;
     dialog.label = item.title || '视频预览';
+    if (embedded) $('preview-title').textContent = dialog.label;
     $('preview-source').href = item.sourceUrl;
     $('preview-meta').textContent = [qualityText(item), item.size ? sizeText(item.size) : '', item.author].filter(Boolean).join(' · ');
+    fit();
     dialog.open = true;
-    if (item.kind === 'hls' && !video.canPlayType('application/vnd.apple.mpegurl')) {
-      const opened = revision;
-      void import('./vendor/ui/hls.js').then(({default: Hls}) => {
-        // Closing or selecting another video while the module loads cancels this preview.
-        if (opened !== revision || !dialog.open) return;
-        hls = new Hls({enableWorker: false});
-        hls.on(Hls.Events.ERROR, (_, data) => {
-          if (data.fatal) { hls.stopLoad(); $('preview-loading').hidden = true; notice('预览加载失败，视频地址可能已失效。', true); }
-        });
-        hls.loadSource(item.url);
-        hls.attachMedia(video);
-        void play();
-      }).catch(error => {
-        if (opened !== revision || !dialog.open) return;
-        $('preview-loading').hidden = true;
-        notice(error.message);
-      });
-    } else {
-      video.src = item.url;
-      void play();
-    }
+    if (embedded) dialog.hidden = false;
+    video.src = item.url;
+    void play();
   }
 
   $('preview-refresh').addEventListener('click', () => {
@@ -128,10 +124,18 @@ export function createPlayer({onRefresh, bounds = defaultBounds, fullscreen = tr
     notice('正在按来源网页重新解析…');
     onRefresh(current, fresh => { if (dialog.open && revision === refreshing) open(fresh); });
   });
-  dialog.addEventListener('wa-after-hide', event => {
-    if (event.target !== dialog) return;
+  const release = () => {
     if (document.fullscreenElement) void document.exitFullscreen();
     reset();
+    onClose?.();
+  };
+  dialog.addEventListener('wa-after-hide', event => {
+    if (event.target === dialog) release();
+  });
+  if (embedded) dialog.querySelector('[data-dialog="close"]').addEventListener('click', () => {
+    dialog.open = false;
+    dialog.hidden = true;
+    release();
   });
   $('preview-play').addEventListener('click', toggle);
   $('preview-big-play').addEventListener('click', toggle);
@@ -143,6 +147,7 @@ export function createPlayer({onRefresh, bounds = defaultBounds, fullscreen = tr
   });
   for (const type of ['timeupdate', 'loadedmetadata', 'durationchange', 'progress', 'emptied']) video.addEventListener(type, renderTime);
   video.addEventListener('loadedmetadata', fit);
+  window.addEventListener('resize', () => { if (dialog.open) fit(); });
   $('preview-seek').addEventListener('input', () => { video.currentTime = Number($('preview-seek').value); renderTime(); });
   $('preview-mute').addEventListener('click', () => { video.muted = !video.muted; });
   video.addEventListener('volumechange', () => setButton($('preview-mute'), video.muted ? '取消静音' : '静音', video.muted ? 'volume-x' : 'volume-2'));
@@ -172,7 +177,7 @@ export function createPlayer({onRefresh, bounds = defaultBounds, fullscreen = tr
   video.addEventListener('playing', () => { $('preview-loading').hidden = true; });
   video.addEventListener('waiting', () => { if (dialog.open) $('preview-loading').hidden = false; });
   video.addEventListener('error', () => {
-    if (!video.getAttribute('src') && !hls) return;
+    if (!video.getAttribute('src')) return;
     $('preview-loading').hidden = true;
     if (video.error?.code === 3) notice('浏览器无法解码此画质，请选择其他画质或直接下载。');
     else notice('预览加载失败，视频地址可能已失效。', true);

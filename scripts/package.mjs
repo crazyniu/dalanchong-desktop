@@ -2,7 +2,7 @@
  * AI module map
  * Purpose: build native Tauri distribution artifacts for a selected host/architecture.
  * Entry: package scripts pass platform/arch; RELEASE_BUILD selects signed release handling.
- * Flow: validate target/signing, stage the original video extension, invoke the native build, collect
+ * Flow: validate target/signing, stage the minified video extension, invoke the native build, collect
  * bundles into dist-release/tauri/<platform>/<arch>, and write manifest hashes/signatures.
  * Invariants: do not cross-build on the wrong OS, expose signing secrets, or imply packaging
  * publishes a release. Run only for an explicitly requested build/package/release task.

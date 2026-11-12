@@ -3,7 +3,8 @@
  * Purpose: define the shared desktop event/method contracts and select native vs preview mode.
  * Entry: desktop is a singleton bridge inside Tauri and undefined in browser preview.
  * Flow: RuntimeData, LicenseState, UpdateState, and DesktopEvent connect Rust events,
- * runtime.mjs orchestration, and React stores without exposing native credentials.
+ * runtime.mjs orchestration, and React stores. State/events never contain saved
+ * license codes; only getSavedLicenseCode supplies the trusted activation form's input.
  * Runtime events patch changed domains; task events replace one account/kind task.
  * Task maps use `${accountId}:${kind}` keys while Task.accountId keeps account identity.
  * stop cancels one kind when specified, or every task for the account when omitted.
@@ -104,6 +105,8 @@ declare global {
       checkForUpdates: () => Promise<UpdateState>
       applyUpdate: (beforeInstall?: () => Promise<void>) => Promise<UpdateState>
       getLicenseState: () => Promise<LicenseState>
+      getSavedLicenseCode: () => Promise<string>
+      verifyLicense: () => Promise<LicenseState>
       activateLicense: (
         code: string
       ) => Promise<{

@@ -1,12 +1,13 @@
 //! AI module map
-//! Purpose: render the collection terminal and global invitation progress in a native child view.
+//! Purpose: render collection, invitation and browser-install progress in one native child view.
 //! Entry: main uses overlay_sync; the logs WebView uses overlay_ready/resize/action.
 //! Flow: retain one child WebView and present new content after its layout acknowledgement.
 //! Main keeps running invitations visible across routes and dialogs with the stable
-//! invite-progress presentation key; collection content follows its account and coverage.
+//! global-progress presentation key; browser downloads share that non-modal stack,
+//! while collection content follows its account and coverage.
 //! A raise request reorders an already-presented view above new account WebViews without
 //! hiding it, changing its revision, or activating/focusing the window.
-//! State: Overlay stores the presentation key, bounds, and discriminated collect/invite content.
+//! State: Overlay stores the presentation key, bounds, and discriminated task content.
 //! Presentation revisions change only across hiding/key switches. Late layout and action
 //! messages cannot reveal or operate on a different presentation.
 //! Snapshot state under short locks before native calls; main-thread callbacks also read it.
@@ -228,14 +229,21 @@ pub fn overlay_action(app: AppHandle, webview: Webview, action: Value, revision:
         return Err("此页面无权操作任务浮层".into());
     }
     let state = app.state::<Overlay>();
-    let inviting = {
+    let (inviting, browser_install) = {
         let current = state.current.lock().unwrap();
         if current.revision != revision || !current.presented {
             return Ok(());
         }
-        current.content.as_ref().is_some_and(|(_, _, content)| content["kind"] == "invite")
+        current.content.as_ref().map(|(_, _, content)| (
+            content["kind"] == "invite",
+            content["kind"] == "browser-install" || content["browserInstall"].is_object(),
+        )).unwrap_or((false, false))
     };
-    if inviting {
+    if browser_install && action["type"] == "dismiss-browser-install" {
+        // Dismissal changes presentation only; main keeps native installation alive.
+        app.emit_to("main", "assistant:browser-install-action", json!({ "action": action }))
+            .map_err(|e| e.to_string())?;
+    } else if inviting && action["type"] == "stop" {
         // The global card forwards account-scoped intent; main owns task operations.
         app.emit_to(
             "main",

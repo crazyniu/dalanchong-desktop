@@ -7,6 +7,8 @@
  * Route modules load on entry so activation and other routes do not load dashboard charts.
  * The invitation route uses a platform search parameter for separate sidebar entries
  * and dashboard account navigation; platform account/task ownership remains in the store.
+ * The montage route redirects outside the native Mac desktop; its worker lifetime
+ * belongs to Rust, so route changes do not interrupt local video processing.
  * Invariants: licensing gates business initialization; browser preview remains separate.
  * AppShell owns persistent native-view hosts, so routing must not recreate runtime jobs.
  * Hot replacement unmounts this entry's React root before another root is created.
@@ -20,6 +22,7 @@ import {
   createRouter,
   createHashHistory,
   lazyRouteComponent,
+  redirect,
   RouterProvider,
 } from '@tanstack/react-router'
 import { ThemeProvider } from '@/context/theme-provider'
@@ -28,6 +31,7 @@ import { LoadingState } from '@/components/ui/loading-state'
 import { desktop } from '@/features/commerce/desktop'
 import { LicenseGate } from '@/features/commerce/license'
 import { AppShell } from '@/features/commerce/shell'
+import { isMacVideoMontage } from '@/features/video-montage/platform'
 import type { Platform } from '@/features/commerce/types'
 import './styles/index.css'
 
@@ -55,6 +59,14 @@ const routes = [
     getParentRoute: () => root,
     path: '/tutorial',
     component: lazyRouteComponent(() => import('@/features/commerce/tutorial'), 'TutorialPage'),
+  }),
+  createRoute({
+    getParentRoute: () => root,
+    path: '/video-montage',
+    beforeLoad: async () => {
+      if (!await isMacVideoMontage()) throw redirect({ to: '/' })
+    },
+    component: lazyRouteComponent(() => import('@/features/video-montage/page'), 'VideoMontagePage'),
   }),
 ]
 const router = createRouter({

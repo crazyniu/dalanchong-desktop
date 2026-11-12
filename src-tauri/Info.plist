@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+AI file map
+Purpose: supply the Chinese main-application name independently of its ASCII executable.
+Entry: the macOS Cargo runner uses this to create the development .app; Tauri also
+embeds it in development builds and merges it into the packaged app through
+bundle.macOS.infoPlist. tauri.conf.json owns the stable
+application identifier, version, icons and other platform metadata.
+Boundary: display metadata only; do not change licensing or account data paths.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>大懒虫</string>
+  <key>CFBundleDisplayName</key>
+  <string>大懒虫</string>
+</dict>
+</plist>

@@ -19,6 +19,8 @@ fn main() {
             "toolbar_move",
             "toolbar_action",
             "license_state",
+            "license_saved_code",
+            "license_verify",
             "license_activate",
             "runtime_load",
             "runtime_save",
@@ -52,6 +54,13 @@ fn main() {
             "chrome_save_account",
             "chrome_open",
             "chrome_remove_account",
+            "video_montage_platform",
+            "video_montage_pick_directory",
+            "video_montage_list",
+            "video_montage_open_directory",
+            "video_montage_state",
+            "video_montage_start",
+            "video_montage_cancel",
         ]),
     ))
     .expect("Tauri 权限构建失败");

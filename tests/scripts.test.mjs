@@ -47,7 +47,7 @@ test('版本与中文发布说明必须完整匹配', async (t) => {
   await writeFile(path.join(root, 'release-notes/1.2.3.md'), '只有说明')
   await assert.rejects(readRelease('v1.2.3', root), /新增功能和问题修复/)
 })
-test('三架构哈希签名文件预检后生成 Tauri 公共下载元数据', async (t) => {
+test('两架构哈希签名文件预检后生成 Tauri 公共下载元数据', async (t) => {
   const root = await fixture(t)
   for (const target of TARGETS) {
     const folder = path.join(root, target)
@@ -94,7 +94,7 @@ test('三架构哈希签名文件预检后生成 Tauri 公共下载元数据', a
   const release = { version: '1.2.3', notes: '中文说明', targets }
   const metadata = rewriteMetadata(release, attachments)
   assert.equal(metadata.notes, '中文说明')
-  assert.equal(Object.keys(metadata.platforms).length, 3)
+  assert.equal(Object.keys(metadata.platforms).length, 2)
   assert.equal(
     metadata.platforms['darwin-aarch64'].signature,
     'fixture-signature'

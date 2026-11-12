@@ -13,8 +13,9 @@
  * from sending. Invitations do not query or gate on remaining quota.
  * Collected profiles retain supported business fields only; contact payloads are omitted.
  * Collection publishes each batch immediately and retains only seen IDs for its total;
- * the caller owns durable rows. The document-local send SDK is acquired once, while
- * device identifiers are read again for each invitation.
+ * the caller owns durable rows. Douyin invitation requests use the page's HTTP client,
+ * including its live session/security interceptors. Main and small-shop webpack
+ * loaders are scoped to their live chunk arrays; device values are read per send.
  * Monetary display values use yuan, and unavailable metrics remain absent rather than zero.
  * Never interpret transport uncertainty as confirmed rejection; redact and bound bodies.
  * Changing endpoint/schema logic also requires reviewing page-bridge.js and browser.rs.
@@ -88,37 +89,87 @@ async function pageRequest(platform, path, body, method) {
         .split('; ')
         .find((x) => x.startsWith('ks-s-ctn='))
       if (token) headers['ks-s-ctn'] = decodeURIComponent(token.slice(9))
-    } else if (path === '/connection/pc/im/invite/card/send') {
-      let sdk = window.__DALANCHONG_INVITE_SDK__
-      if (!sdk) {
-        // A unique chunk is needed for the callback, but adding one per invite
-        // grows webpack's chunk registry for the entire document lifetime.
-        window.webpackChunkmain.push([
-          ['ecommerce-device-' + crypto.randomUUID()],
-          {},
-          (require) => {
-            sdk = require('413497')
-          },
-        ])
-        window.__DALANCHONG_INVITE_SDK__ = sdk
+    } else if (path.startsWith('/connection/pc/im/')) {
+      // The current shop page and its host use separate webpack runtimes. Bind
+      // each known client to its own loader; never call a main-app module ID in
+      // the shop runtime or assume either exists during a verification reload.
+      const loaders = window.__DALANCHONG_INVITE_LOADERS__ ||= new WeakMap()
+      let pageRequire
+      let requestModule
+      for (const [chunks, moduleId] of [
+        [window.webpackChunksmall_shop, '25663'],
+        [window.webpackChunkmain, '720762'],
+      ]) {
+        if (!Array.isArray(chunks) || chunks.push === Array.prototype.push) continue
+        let require = loaders.get(chunks)
+        if (!require) {
+          chunks.push([
+            ['ecommerce-invite-' + crypto.randomUUID()],
+            {},
+            (loadedRequire) => { require = loadedRequire },
+          ])
+          if (!require) continue
+          loaders.set(chunks, require)
+        }
+        // Inspect registration only; do not execute unrelated page modules.
+        if (!require.m[moduleId] || !require.m['413497']) continue
+        pageRequire = require
+        requestModule = moduleId
+        break
       }
-      const device = sdk.getNonFxgEcomDid()
-      if (!device.web_did) throw Error('设备信息未就绪，请刷新达人广场')
-      const client = window.webviewBridge?.callBrowserWindow
-        ? await window.webviewBridge.callBrowserWindow('getClientInfo')
-        : null
-      body.event_param = {
-        client_form: 'pc',
-        web_did: String(device.web_did),
-        seraph_did: String(device.seraph_did || ''),
-        x_pigeon_did: String(client?.deviceId || ''),
+      if (!pageRequire)
+        throw Error('抖音网页模块尚未就绪，请在当前网页完成验证或打开达人页面')
+      const request = pageRequire(requestModule)
+      const url = new URL(path, location.origin)
+      const options = {
+        headers,
+        params: Object.fromEntries(url.searchParams),
+        // Keep non-2xx responses out of the website's error-swallowing interceptor.
+        validateStatus: () => true,
       }
-      path +=
-        '?' +
-        new URLSearchParams({
-          ewid: device.ewid,
-          ...(device.seraph_did ? { seraph_did: device.seraph_did } : {}),
-        })
+      if (url.pathname === '/connection/pc/im/invite/card/send') {
+        // Match the website's invitation form: await its device report instead of
+        // reading only getNonFxgEcomDid's cached value from an earlier page session.
+        const device = await pageRequire('413497').reportNonFxgEcomDid({ appName: 'buyin' })
+        if (!device?.web_did || !device.ewid)
+          throw Error('设备信息未就绪，请刷新达人广场')
+        const client = window.webviewBridge?.callBrowserWindow
+          ? await window.webviewBridge.callBrowserWindow('getClientInfo')
+          : null
+        body.event_param = {
+          client_form: 'pc',
+          web_did: String(device.web_did),
+          seraph_did: String(device.seraph_did || ''),
+          x_pigeon_did: String(client?.deviceId || ''),
+        }
+        // reportNonFxgEcomDid updates browser storage but not the getter's private
+        // cache. Use this same report for URL and body; the page client preserves
+        // explicit params when adding its own device defaults.
+        options.params.ewid = device.ewid
+        options.params.seraph_did = device.seraph_did
+      }
+      // Keep the website's session/signing hooks and verification handling.
+      // Preserve HTTP/business failures for our normal parser.
+      dispatched = true
+      let response
+      try {
+        response = method === 'POST'
+          ? await request.v_(url.pathname, body, options)
+          : await request.U2(url.pathname, options)
+      } catch (error) {
+        if (!error.response) throw error
+        response = error.response
+      }
+      if (!response.status) throw Error('平台网页请求未返回响应')
+      return {
+        status: response.status,
+        url: response.request?.responseURL || url.href,
+        text: typeof response.data === 'string'
+          ? response.data
+          : JSON.stringify(response.data),
+        requestId: response.headers['x-tt-logid'] ||
+          response.headers['x-request-id'] || response.headers['request-id'],
+      }
     }
     dispatched = true
     const r = await fetch(path, {
@@ -714,6 +765,9 @@ export async function collect({ platform, capture, request, stopped, progress })
 // Resolve platform rules and build a send request, but do not dispatch the invitation.
 // InviteRunner persists the sending record before executing the returned path/body.
 // Kuaishou contact is the raw contact endpoint's data; no quota gates the send.
+// Douyin's account/entry enums and no-sample/no-extra-rights choices describe this
+// ordinary invitation, not browser identity. Do not replace those choices with a
+// different page form's commitments; session/device/signing values belong to pageRequest.
 export async function prepareInvite(
   api,
   platform,

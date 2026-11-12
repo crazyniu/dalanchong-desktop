@@ -7,6 +7,8 @@
  * means no user cap, while quota limits remain independent. IDs and platform/account
  * scope must survive serialization unchanged. This module performs no platform calls.
  * Task.activity is a bounded session-only collection stream, separate from error logs.
+ * Task.retryAt is the runner's retry deadline in epoch milliseconds; views only
+ * derive its remaining seconds and never schedule requests themselves.
  * CollectedTalent's optional profile/commerce fields come from the collection response;
  * missing fields remain absent in older snapshots. Amount strings retain disclosed
  * ranges in yuan; Kuaishou sales belong to the source shop, while Douyin sales describe
@@ -156,6 +158,7 @@ export type Task = {
   failed: number
   review: number
   current: string
+  retryAt?: number
   filters: Filters
 }
 export const platformNames = { kuaishou: '快手', douyin: '抖音' }

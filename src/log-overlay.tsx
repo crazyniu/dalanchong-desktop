@@ -2,8 +2,10 @@
  * AI module map
  * Purpose: bootstrap the transparent native task/log child WebView.
  * Entry: overlay.html loads Logs; Rust overlay.rs sends assistant:logs snapshots.
- * Flow: subscribe before requesting overlay_ready, render collect/invite content, measure
- * its DOM size, and report overlay_resize. Invitation actions are forwarded to main.
+ * Flow: subscribe before requesting overlay_ready, render collection/invitation/browser
+ * cards in a bounded non-modal stack, measure
+ * its DOM size including transparent shadow padding, and report overlay_resize
+ * without adding external margins. Invitation actions are forwarded to main.
  * The native child persists through hiding. Collection keys retain local scroll/collapse
  * state through dialogs and reset it across account/task changes. Presentation revisions
  * acknowledge committed layout before showing, even when a hidden view pauses rAF.
@@ -17,16 +19,13 @@ import { createRoot } from 'react-dom/client'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { CollectionLog } from './features/commerce/collection-log'
+import { BrowserInstallProgress } from './features/commerce/browser-install-progress'
 import {
   InviteProgress,
   type TaskOverlayContent,
 } from './features/commerce/invite-progress'
-import './log-overlay.css'
 import './styles/index.css'
-
-document.documentElement.style.background = 'transparent'
-document.body.style.background = 'transparent'
-document.body.style.overflow = 'hidden'
+import './log-overlay.css'
 
 type OverlayPresentation = {
   revision: number
@@ -79,8 +78,8 @@ export function Logs() {
       const card = root.firstElementChild
       if (card) {
         const { width, height } = card.getBoundingClientRect()
-        const nextWidth = Math.ceil(width + 32)
-        const nextHeight = Math.ceil(height + 32)
+        const nextWidth = Math.ceil(width)
+        const nextHeight = Math.ceil(height)
         if (nextWidth === previousWidth && nextHeight === previousHeight &&
             revision === previousRevision) return
         previousWidth = nextWidth
@@ -117,18 +116,27 @@ export function Logs() {
     measureNow.current()
   }, [revision])
   if (!content) return null
-  return content.kind === 'invite' ? (
-    <InviteProgress
-      state={content}
-      onAction={(action) => {
-        void invoke('overlay_action', { action, revision })
-      }}
-    />
-  ) : (
-    <CollectionLog
-      key={`${content.task.accountId}:${content.task.startedAt}`}
-      task={content.task}
-    />
+  const browserInstall = content.kind === 'browser-install' ? content.state : content.browserInstall
+  return (
+    <div
+      data-slot='task-progress-stack'
+      data-collection={content.kind === 'collect'}
+      className='absolute right-0 bottom-0 flex flex-col items-stretch gap-3'
+    >
+      {content.kind === 'invite' && (
+        <InviteProgress state={content} onAction={(action) => {
+          void invoke('overlay_action', { action, revision })
+        }} />
+      )}
+      {content.kind === 'collect' && (
+        <CollectionLog key={`${content.task.accountId}:${content.task.startedAt}`} task={content.task} />
+      )}
+      {browserInstall && (
+        <BrowserInstallProgress state={browserInstall} onDismiss={() => {
+          void invoke('overlay_action', { action: { type: 'dismiss-browser-install' }, revision })
+        }} />
+      )}
+    </div>
   )
 }
 const root = createRoot(document.getElementById('root')!)

@@ -1,19 +1,23 @@
 /**
  * AI module map
- * Purpose: Douyin batch link parsing, selected quality, copying, downloads and previews.
- * Entry: manager.html loads this single-page workspace, including the shop bookmark.
+ * Purpose: captured-video batch downloads and Douyin original-first link parsing.
+ * Entry: manager.html loads from the popup's captured scope or the shop bookmark.
  * Flow: compact share-link input calls background PARSE_URL; collapsible parse records
  * accompany the main video list, and its fixed batch bar copies or queues selected formats.
  * State: parsed group keys persist in page sessionStorage; selection uses those same
  * work keys while format choices remain local. chrome.storage.session supplies validated
- * media/jobs. Queue options are fixed, and parse jobs are keyed by link plus quality.
+ * media/jobs. Parse jobs are keyed by normalized share link.
  * Each media render computes grouping once; selection-only changes reuse rendered rows.
- * Invariants: this page lists works parsed here; popup.js presents the captured-page library. Parsing is serialized and each request retains its selected quality.
+ * List links display the selected format's playback URL and open it in a new tab.
+ * Invariants: this page lists its captured scope and works parsed here; serialized parsing prefers original quality,
+ * then accepts the available quality returned by the background. Only user actions select rows.
  * Side effects: runtime messages, storage listeners, clipboard writes, parser timers, DOM updates, and player.js previews.
  */
 import './vendor/ui/components.js';
 import {createPlayer} from './player.js';
-import {videoGroups} from './media-records.js';
+import {mediaTabIds, videoGroups, videoGroupKey} from './media-records.js';
+import {videoPage} from './platforms.js';
+import {extractVideoURLs} from './resolve.js';
 import {$, activeStates, copyText, downloadState, element, groupedItems, icon, iconButton, indexDownloadJobs, loadResolutions, probeResolutions, qualitySelect, qualityText, queue, readLibrary, send, showLibraryError, sizeText, thumb, toast} from './ui.js';
 
 const selected = new Set();
@@ -23,10 +27,23 @@ let jobsByMedia = new Map(), parsedMediaIds = new Set();
 let items = [], jobs = [], inputTimer;
 let parsed = [], visible = [], submitting = false;
 const pageURL = new URL(location.href);
-// This page only lists works parsed here; videos captured on other pages are shown in the popup.
+const capturedView = pageURL.searchParams.get('view') === 'captured';
+const capturedTabId = pageURL.searchParams.has('tabId') ? Number(pageURL.searchParams.get('tabId')) : null;
+const capturedIds = new Set((pageURL.searchParams.get('ids') || '').split(',').filter(Boolean));
+let initialSelection = capturedIds.size > 0;
+if (capturedView) {
+  $('videos-title').textContent = '视频批量下载';
+  document.title = '视频批量下载 · 大懒虫';
+}
+// Parsed works remain part of this page when additional links are submitted.
 const parsedKeys = new Set(JSON.parse(sessionStorage.getItem('parsedKeys') || '[]'));
 const saveParsed = () => sessionStorage.setItem('parsedKeys', JSON.stringify([...parsedKeys]));
-const isDouyinLink = line => /https?:\/\/[^\s]*(douyin\.com|iesdouyin\.com)/i.test(line);
+
+function inCapturedScope(item) {
+  if (!capturedView) return false;
+  if (capturedIds.size && !capturedIds.has(item.id)) return false;
+  return capturedTabId === null || mediaTabIds(item).includes(capturedTabId);
+}
 
 /* ---------- Videos ---------- */
 function renderSelection(updateRows = false) {
@@ -69,10 +86,8 @@ function mediaRow(item) {
   title.title = item.title || '';
   const meta = element('div', undefined, 'media-meta');
   if (item.author) meta.append(element('span', item.author, 'ellipsis'));
-  if (item.videoOnly) meta.append(element('span', '自动合并音轨', 'pill'));
-  if (item.kind === 'hls' && !item.quality?.includes('HLS')) meta.append(element('span', 'HLS', 'pill'));
-  const source = element('a', new URL(item.sourceUrl).hostname, 'source ellipsis');
-  source.href = item.sourceUrl; source.target = '_blank'; source.rel = 'noreferrer'; source.title = item.sourceUrl;
+  const source = element('a', item.url, 'source ellipsis');
+  source.href = item.url; source.target = '_blank'; source.rel = 'noopener noreferrer'; source.title = item.url;
   meta.append(source);
   text.append(title, meta);
   main.append(thumb(item), text);
@@ -102,17 +117,25 @@ function mediaRow(item) {
 }
 
 function renderMedia() {
-  parsed = groupedItems(items, chosenFormats).filter(item => parsedKeys.has(item.groupKey));
+  const scopedItems = items.filter(item => inCapturedScope(item) || parsedKeys.has(videoGroupKey(item)));
+  if (initialSelection) {
+    for (const item of scopedItems) {
+      if (capturedIds.has(item.id)) {
+        const key = videoGroupKey(item);
+        selected.add(key); chosenFormats.set(key, item.id);
+      }
+    }
+    initialSelection = false;
+  }
+  parsed = groupedItems(scopedItems, chosenFormats);
   const currentKeys = new Set(parsed.map(item => item.groupKey));
   for (const key of selected) if (!currentKeys.has(key)) selected.delete(key);
-  const query = $('search').value.trim().toLowerCase();
-  visible = parsed.filter(item => `${item.title} ${item.author || ''} ${item.sourceUrl}`.toLowerCase().includes(query));
+  visible = parsed;
   const total = parsed.length;
   probeResolutions(visible.flatMap(item => item.formats), renderMedia);
-  $('visible-count').textContent = query ? `${visible.length} / ${total}` : String(total);
+  $('visible-count').textContent = String(total);
   $('table-head').hidden = visible.length === 0;
   $('empty').hidden = visible.length > 0;
-  $('empty').querySelector('h3').textContent = total ? '没有匹配的视频' : '暂无视频';
   $('clear').disabled = total === 0;
   parsedMediaIds = new Set(parsed.flatMap(item => item.formats.map(format => format.id)));
   renderJobSummary();
@@ -142,10 +165,15 @@ async function start(ids) {
   toast(`已添加 ${jobIds.length} 个下载任务`);
 }
 
-async function startBatch(targets) {
+async function startBatch(getTargets) {
   submitting = true;
   renderSelection();
   try {
+    parseLines();
+    await parseChain;
+    await refresh();
+    const targets = getTargets();
+    if (!targets.length) return;
     await start(targets.map(item => item.id));
     for (const item of targets) selected.delete(item.groupKey);
   } finally {
@@ -155,47 +183,48 @@ async function startBatch(targets) {
 }
 
 /* ---------- Parse ---------- */
-// One request per line, run one after another so platform pages are not opened all at once.
+// Share text becomes canonical URL-only jobs; serial requests resolve in the background without source tabs.
 const parseJobs = new Map();
 const parseByRequest = new Map();
-let parseChain = Promise.resolve(), filtersReset = false;
-const allLinkLines = () => [...new Set($('video-url').value.split('\n').map(line => line.trim()).filter(line => /https?:\/\/\S+\.\S+/i.test(line)))];
-const linkLines = () => allLinkLines().filter(isDouyinLink);
-const parseKey = (value, quality = $('parse-quality').value) => `${quality}\n${value}`;
+let parseChain = Promise.resolve();
+const linkLines = () => extractVideoURLs($('video-url').value);
+function cleanInput() {
+  $('video-url').value = linkLines().join('\n');
+  fitInput();
+}
 
 function finishParse(job, state) {
   job.state = state;
+  if (state.status === 'error') $('parse-results').open = true;
   if (state.status === 'ready') {
     const preferred = state.items.find(item => item.id === state.preferredId) || state.items[0];
     const key = videoGroups([preferred])[0].key;
     chosenFormats.set(key, preferred.id);
     parsedKeys.add(key); saveParsed();
-    selected.add(key);
     job.onReady?.(preferred);
-    if (!filtersReset) { $('search').value = ''; filtersReset = true; }
   }
   if (state.status !== 'loading') { parseByRequest.delete(job.requestId); job.done?.(); }
   renderParse();
 }
 
-function enqueueParse(value, onReady, quality = $('parse-quality').value) {
-  const job = {value, onReady, requestId: crypto.randomUUID(), quality, state: {status: 'queued', message: '等待解析'}};
-  parseJobs.set(parseKey(value, quality), job);
+function enqueueParse(value, onReady) {
+  const job = {value, onReady, requestId: crypto.randomUUID(), state: {status: 'queued', message: '等待解析'}};
+  parseJobs.set(value, job);
   parseByRequest.set(job.requestId, job);
   parseChain = parseChain.then(() => new Promise(resolve => {
     job.done = resolve;
     job.state = {status: 'loading', message: '正在识别…'};
     renderParse();
-    send({type: 'PARSE_URL', requestId: job.requestId, value: job.value, quality: job.quality})
+    send({type: 'PARSE_URL', requestId: job.requestId, value: job.value})
       .catch(error => finishParse(job, {status: 'error', message: error.message}));
   }));
 }
 
 function parseLines(retryFailed = false) {
   clearTimeout(inputTimer);
-  filtersReset = false;
+  cleanInput();
   for (const value of linkLines()) {
-    const job = parseJobs.get(parseKey(value));
+    const job = parseJobs.get(value);
     if (!job || (retryFailed && job.state.status === 'error')) enqueueParse(value);
   }
   renderParse();
@@ -210,7 +239,9 @@ function resultRow(job) {
   const text = element('span', undefined, 'result-text');
   const link = element('span', job.value.match(/https?:\/\/\S+/i)?.[0] || job.value, 'result-link ellipsis');
   link.title = job.value;
-  text.append(link, element('span', `${job.quality === 'original' ? '原片' : '高清'} · ${message}`, 'result-message ellipsis'));
+  const preferred = job.state.items?.find(item => item.id === job.state.preferredId) || job.state.items?.[0];
+  const description = element('span', [preferred && qualityText(preferred), message].filter(Boolean).join(' · '), 'result-message');
+  text.append(link, description);
   const actions = element('span', undefined, 'result-actions');
   if (status === 'error') {
     if (sourceTabId) {
@@ -219,7 +250,7 @@ function resultRow(job) {
       actions.append(open);
     }
     const retry = iconButton('refresh-cw', '重试', 'btn sm icon');
-    retry.onclick = () => { enqueueParse(job.value, undefined, job.quality); renderParse(); };
+    retry.onclick = () => { enqueueParse(job.value); renderParse(); };
     actions.append(retry);
   }
   row.append(state, text, actions);
@@ -229,8 +260,7 @@ function resultRow(job) {
 function renderParse() {
   const all = [...parseJobs.values()];
   const count = linkLines().length;
-  const skipped = allLinkLines().length - count;
-  $('link-count').textContent = [count && `${count} 个抖音链接`, skipped && `已忽略 ${skipped} 个非抖音链接`].filter(Boolean).join(' · ');
+  $('link-count').textContent = count ? `${count} 个抖音链接` : '';
   $('parse-results').hidden = !all.length;
   const ready = all.filter(job => job.state.status === 'ready');
   const failed = all.filter(job => job.state.status === 'error').length;
@@ -246,13 +276,14 @@ $('video-url').addEventListener('keydown', event => {
   if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); parseLines(true); }
 });
 const fitInput = () => { $('video-url').style.height = 'auto'; $('video-url').style.height = `${$('video-url').scrollHeight}px`; };
+$('video-url').addEventListener('blur', cleanInput);
 $('video-url').addEventListener('input', event => {
   clearTimeout(inputTimer);
   fitInput();
   renderParse();
-  if (!event.isComposing && linkLines().some(line => !parseJobs.has(parseKey(line)))) inputTimer = setTimeout(() => parseLines(), 800);
+  if (!event.isComposing && linkLines().some(line => !parseJobs.has(line))) inputTimer = setTimeout(() => parseLines(), 800);
 });
-$('parse-quality').addEventListener('change', () => parseLines());
+
 $('parse-results').addEventListener('toggle', renderParse);
 $('results-clear').addEventListener('click', () => {
   for (const [value, job] of parseJobs) if (job.state.status !== 'loading' && job.state.status !== 'queued') parseJobs.delete(value);
@@ -260,25 +291,29 @@ $('results-clear').addEventListener('click', () => {
 });
 
 /* ---------- Toolbar ---------- */
-$('search').addEventListener('input', renderMedia);
-$('search').addEventListener('wa-clear', renderMedia);
 $('select-all').addEventListener('change', () => {
   for (const item of visible) { if ($('select-all').checked) selected.add(item.groupKey); else selected.delete(item.groupKey); }
   renderSelection(true);
 });
-$('batch-download').addEventListener('click', () => void startBatch(parsed.filter(item => selected.has(item.groupKey))).catch(error => toast(error.message, true)));
+$('batch-download').addEventListener('click', () => {
+  const keys = new Set(selected);
+  void startBatch(() => parsed.filter(item => keys.has(item.groupKey))).catch(error => toast(error.message, true));
+});
 $('batch-copy').addEventListener('click', () => {
   const urls = parsed.filter(item => selected.has(item.groupKey)).map(item => item.url);
   void copyText(urls.join('\n'), `已复制 ${urls.length} 个视频地址`);
 });
 $('batch-clear').addEventListener('click', () => { selected.clear(); renderSelection(true); });
-$('download-all').addEventListener('click', () => void startBatch(parsed).catch(error => toast(error.message, true)));
+$('download-all').addEventListener('click', () => void startBatch(() => parsed).catch(error => toast(error.message, true)));
 $('clear').addEventListener('click', async () => {
   try {
+    if (capturedView) await send({type: 'CLEAR_MEDIA', ids: parsed.flatMap(item => item.formats.map(format => format.id)),
+      ...(capturedTabId === null ? {} : {tabId: capturedTabId})});
     parsedKeys.clear(); saveParsed();
     chosenFormats.clear(); selected.clear();
     for (const [value, job] of parseJobs) if (!['loading', 'queued'].includes(job.state.status)) parseJobs.delete(value);
-    renderMedia(); renderParse();
+    if (capturedView) await refresh(); else renderMedia();
+    renderParse();
     toast('已清空列表');
   } catch (error) { toast(error.message, true); }
 });
@@ -286,7 +321,8 @@ $('clear').addEventListener('click', async () => {
 /* ---------- Preview ---------- */
 // An expired address is resolved again from the work page, then the fresh record is previewed.
 const player = createPlayer({onRefresh(item, show) {
-  enqueueParse(item.sourceUrl, show, item.quality === '原片候选' ? 'original' : 'hd');
+  if (!videoPage(item.sourceUrl)) { toast('视频地址已失效，请回到来源网页重新播放。', true); return; }
+  enqueueParse(item.sourceUrl, show);
   renderParse();
 }});
 const openPreview = item => player.open(item);
@@ -300,7 +336,7 @@ function refresh() {
     do {
       refreshRequested = false;
       const data = await readLibrary();
-      items = data.items.filter(item => item.platform === '抖音').sort((a, b) => b.createdAt - a.createdAt);
+      items = data.items.sort((a, b) => b.createdAt - a.createdAt);
       jobs = data.jobs;
       jobsByMedia = indexDownloadJobs(jobs);
       $('library-status').hidden = true;

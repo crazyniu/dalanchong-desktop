@@ -1,7 +1,7 @@
 <!doctype html>
 <!--
 AI file map
-Purpose: Douyin batch parsing and download workspace.
+Purpose: captured-video batch downloads and Douyin link parsing workspace.
 Entry: opened by the extension popup or the shop browser bookmark.
 Flow: manager.js owns link parsing, selected formats, copying, downloads and preview;
 theme.css, manager.css and player.css match the desktop application's neutral controls.
@@ -24,15 +24,12 @@ Boundary: IDs are the controller contract. The background owns validated media a
       <form id="parse-form" class="parse card">
         <div class="parse-inputs">
           <label for="video-url" class="sr-only">抖音链接或分享文案，每行一个</label>
-          <textarea id="video-url" class="parse-text" rows="2" placeholder="粘贴抖音链接或分享文案，每行一个" autocomplete="off" spellcheck="false"></textarea>
-          <div class="parse-controls">
-            <wa-select id="parse-quality" value="hd" size="s" class="parse-quality label-hidden" label="解析画质">
-              <wa-option value="hd">高清</wa-option><wa-option value="original">原片</wa-option>
-            </wa-select>
-            <button id="parse" class="btn primary" type="submit">解析</button>
-          </div>
+          <textarea id="video-url" class="parse-text" rows="4" placeholder="粘贴抖音地址或分享文案，每行一个。下载的视频就是溯源的原视频。" autocomplete="off" spellcheck="false"></textarea>
         </div>
-        <div id="link-count" class="link-count muted"></div>
+        <div class="parse-controls">
+          <div id="link-count" class="link-count muted" aria-live="polite"></div>
+          <button id="parse" class="btn primary" type="submit">解析</button>
+        </div>
         <details id="parse-results" class="parse-results" hidden>
           <summary class="results-toggle"><span>解析记录</span><span id="results-summary" aria-live="polite"></span><wa-icon name="chevron-down"></wa-icon></summary>
           <div class="results-head"><button id="results-clear" class="btn sm" type="button">清除记录</button></div>
@@ -42,7 +39,6 @@ Boundary: IDs are the controller contract. The background owns validated media a
       <section class="library card" aria-label="视频列表">
         <div class="toolbar">
           <h2>视频列表 <span id="visible-count" class="counter">0</span></h2>
-          <wa-input id="search" value="" class="toolbar-search label-hidden" label="搜索视频" placeholder="搜索标题或来源" with-clear><wa-icon name="search" slot="start"></wa-icon></wa-input>
           <button id="clear" class="btn outline danger" type="button" disabled><wa-icon name="trash-2"></wa-icon>清空</button>
         </div>
         <div class="table-head" id="table-head" hidden>

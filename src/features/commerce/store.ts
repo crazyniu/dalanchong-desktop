@@ -17,7 +17,8 @@
  * jobs belong to the runtime and continue independently of the replaced React store.
  * Successful account removal drops its form preferences and ephemeral task/capture state;
  * native runtime removal commits the same preference change while retaining history.
- * Demo collection activity mirrors native batch events and stays in non-persisted tasks.
+ * Demo collection activity mirrors native batch events, stays in non-persisted tasks,
+ * and is cleared when collection stops or finishes.
  * Demo invitations process the first row immediately and retain the talent UID in history.
  * Their queue excludes any existing account/platform invitation record before calculating
  * task totals, matching native invitation preparation without creating skipped history.
@@ -51,7 +52,7 @@ export const defaults: InviteConfig = {
     : '您好，想邀请您合作店铺的家居好物。可提供样品和专属佣金，欢迎联系，期待合作！',
   phone: '',
   wechat: desktop ? '' : 'shop_demo',
-  interval: 1000,
+  interval: 5000,
   maxInvites: null,
 }
 export const defaultFilters: Filters = {
@@ -483,18 +484,7 @@ export function stopDemo(accountId: string, kind?: Task['kind']) {
         ...task,
         status: 'stopped',
         current: '已停止',
-        ...(task.kind === 'collect'
-          ? {
-              activity: [
-                ...(task.activity || []),
-                {
-                  time: new Date().toISOString(),
-                  level: 'info' as const,
-                  message: `采集已停止，共 ${task.collected} 位达人`,
-                },
-              ].slice(-200),
-            }
-          : {}),
+        ...(task.kind === 'collect' ? { activity: [] } : {}),
       }
     }
     return { tasks }
@@ -594,12 +584,6 @@ export function collectDemo(account: Account, filters: Filters) {
         level: 'info',
         message: `采集第 ${Math.floor(current.collected / 20) + 1} 页 · ${end} 位达人 · 新增 ${added} · 已有 ${batch.length - added}`,
       })
-      if (done)
-        activity.push({
-          time,
-          level: 'success',
-          message: `采集完成，共 ${end} 位达人`,
-        })
       return {
         talents: [...pool.values()],
         collections: s.collections.map((c) =>
@@ -609,7 +593,7 @@ export function collectDemo(account: Account, filters: Filters) {
           ...s.tasks,
           [key]: {
             ...current,
-            activity: [...(current.activity || []), ...activity].slice(-200),
+            activity: done ? [] : [...(current.activity || []), ...activity].slice(-200),
             collected: end,
             processed: end,
             status: done ? 'done' : 'running',
@@ -763,7 +747,7 @@ export function startDemo(
         record.response
       )
   }
-  const timer = setInterval(advance, config.interval)
+  const timer = setInterval(advance, account.platform === 'douyin' ? Math.max(5000, config.interval) : config.interval)
   timers.set(key, timer)
   advance()
 }

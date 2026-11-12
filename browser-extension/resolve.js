@@ -1,58 +1,52 @@
 /**
  * AI module map
- * Purpose: resolve Douyin share text and work URLs into verified extension media records.
- * Entry: background.js calls resolveVideoURL with platform-analysis and progress callbacks.
- * Flow: extracts a Douyin URL and reuses/opens its source tab; page.js analysis returns only that work’s verified media.
- * State: tab-load listeners and timers belong to each resolution request and are cleaned up when it settles.
- * Invariants: opening a tab alone is not a successful parse; the request returns discovered media or propagates the actual resolution error.
- * Side effects: browser tab operations, Douyin page analysis through the supplied callback.
+ * Purpose: extract Douyin links from share text and resolve works without opening tabs.
+ * Entry: manager.js uses extractVideoURLs; background.js calls resolveVideoURL with its page-context resolver.
+ * Flow: direct links supply the work ID; short-link HTTP redirects reveal it. The supplied resolver reads that ID in an existing Douyin page's MAIN world and saves verified media.
+ * State: link resolution belongs to this request; browser context and media persistence belong to background.js.
+ * Invariants: never navigate or create browser tabs; only the requested work is returned, and verification/login failures remain explicit errors.
+ * Side effects: short-link HTTP requests and the supplied resolver. Download scheduling remains caller-owned.
  */
-import {videoPage} from './platforms.js';
+
+export function extractVideoURLs(value) {
+  const links = value.match(/https?:\/\/[^\s<>"'，。！？；、]+/gi) || [];
+  return [...new Set(links.flatMap(link => {
+    // Share text is untrusted input; malformed and unrelated URLs are discarded.
+    try {
+      const url = new URL(link.replace(/[)）\]】.,;!?]+$/, ''));
+      return url.protocol === 'https:' && /(^|\.)(douyin\.com|iesdouyin\.com)$/.test(url.hostname) ? [url.href] : [];
+    } catch { return []; }
+  }))];
+}
 
 export function extractVideoURL(value) {
-  const match = value.match(/https?:\/\/[^\s<>"'，。！？；、]+/i);
-  if (!match) throw new Error('请输入完整的 http 或 https 视频网址，也可以直接粘贴分享文案。');
-  const url = new URL(match[0].replace(/[)）\]】.,;!?]+$/, ''));
-  if (url.protocol !== 'https:' || !/(^|\.)(douyin\.com|iesdouyin\.com)$/.test(url.hostname)) throw new Error('请输入抖音作品或分享链接。');
-  return url.href;
+  const [url] = extractVideoURLs(value);
+  if (!url) throw new Error('请输入抖音作品或分享链接。');
+  return url;
 }
 
-function samePage(first, second) {
-  const a = videoPage(first), b = videoPage(second);
-  return a && b ? a.platform === b.platform && a.id === b.id : first === second;
+function workId(url) {
+  const parsed = new URL(url);
+  return parsed.searchParams.get('modal_id') || parsed.searchParams.get('vid')
+    || parsed.pathname.match(/^\/(?:share\/)?video\/(\d+)/)?.[1];
 }
 
-function waitForPage(tabId) {
-  return new Promise((resolve, reject) => {
-    const finish = (error, tab) => {
-      clearTimeout(timer);
-      chrome.tabs.onUpdated.removeListener(updated);
-      chrome.tabs.onRemoved.removeListener(removed);
-      if (error) reject(error); else resolve(tab);
-    };
-    const updated = (id, change, tab) => {
-      if (id === tabId && change.status === 'complete') finish(null, tab);
-    };
-    const removed = id => { if (id === tabId) finish(new Error('解析网页已关闭，请重新解析链接。')); };
-    const timer = setTimeout(() => finish(new Error('网页加载超时，请打开来源网页完成登录或验证后重试。')), 30000);
-    chrome.tabs.onUpdated.addListener(updated);
-    chrome.tabs.onRemoved.addListener(removed);
-    chrome.tabs.get(tabId).then(tab => { if (tab.status === 'complete') finish(null, tab); }, error => finish(error));
-  });
-}
-
-export async function resolveVideoURL(value, {quality, onProgress, analyze}) {
+export async function resolveVideoURL(value, {onProgress, resolveWork}) {
   const url = extractVideoURL(value);
-  await onProgress({message: '正在识别抖音链接…'});
-  const tabs = await chrome.tabs.query({});
-  let tab = tabs.find(tab => /^https?:/.test(tab.url || '') && samePage(tab.url, url));
-  if (!tab) tab = await chrome.tabs.create({url, active: false});
-  await onProgress({message: '正在加载视频网页，复用浏览器登录态…', sourceTabId: tab.id});
-  tab = await waitForPage(tab.id);
-  if (!videoPage(tab.url)) throw new Error('链接未打开抖音视频作品，请在来源网页完成登录或验证后重试。');
-  await onProgress({message: '正在提取视频下载地址…', sourceTabId: tab.id});
-  const result = await analyze(tab.id, quality);
-  // Only this work's detail-derived result belongs to the request. Other media
-  // loaded by the same tab can be recommendations or unrelated player assets.
-  return {items: [{...result, id: result.mediaId}], sourceTabId: tab.id, preferredId: result.mediaId, url: tab.url};
+  let id = workId(url);
+  if (!id) {
+    await onProgress({message: '正在展开抖音分享链接…'});
+    const response = await fetch(url, {credentials: 'include', redirect: 'follow', signal: AbortSignal.timeout(30000)});
+    try {
+      if (!response.ok) throw new Error(`分享链接返回 HTTP ${response.status}。`);
+      id = workId(extractVideoURL(response.url));
+    } finally {
+      await response.body?.cancel();
+    }
+  }
+  if (!/^\d+$/.test(id || '')) throw new Error('链接未返回抖音视频作品，请完成登录或验证后重试。');
+  await onProgress({message: '正在读取抖音作品…'});
+  const result = await resolveWork(id, onProgress);
+  const sourceUrl = `https://www.douyin.com/video/${id}`;
+  return {items: [result], preferredId: result.id, url: sourceUrl};
 }

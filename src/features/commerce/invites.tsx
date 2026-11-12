@@ -18,7 +18,7 @@
  * actual collection/invitation jobs remain in the runtime while dialogs close or tabs change.
  * Removed accounts release their selections. Closing/submitting the invitation form
  * releases its ID snapshot; temporarily leaving for login retains that pending scope.
- * Opening a new Kuaishou invitation raises saved intervals below 2000 ms to its minimum.
+ * Opening an invitation raises saved intervals to 2000 ms for Kuaishou or 5000 ms for Douyin.
  * BrowserLayer owns global invitation feedback independently of this workspace;
  * completed or stopped tasks stay in history without reopening a progress card.
  * Switching platform remounts presentation state; collected rows and selection are scoped
@@ -158,9 +158,7 @@ function InviteWorkspace({ platform }: { platform: Platform }) {
   const collectionTask = useCommerce((s) => desktop ? undefined : s.tasks[`${browserAccountId}:collect`])
   const hasCollectionRecords =
     collectionTask?.kind === 'collect' &&
-    (collecting ||
-      Boolean(collectionTask.activity?.length) ||
-      Boolean(collectionTask.logs?.some((entry) => entry.level === 'error')))
+    collectionTask.status === 'running'
   const pageCollecting = useCommerce((s) => {
     return s.tasks[`${shownAccount?.id}:collect`]?.status === 'running'
   })
@@ -214,10 +212,10 @@ function InviteWorkspace({ platform }: { platform: Platform }) {
   }
   const openInvite = useCallback((ids: string[]) => {
     const store = useCommerce.getState()
-    const config = store.configs[browserAccountId] || defaults
+    const config = store.configs[browserAccountId] || { ...defaults, interval: platform === 'kuaishou' ? 2000 : 5000 }
     store.saveConfig(browserAccountId, {
       ...config,
-      interval: platform === 'kuaishou' ? Math.max(2000, config.interval) : config.interval,
+      interval: Math.max(platform === 'kuaishou' ? 2000 : 5000, config.interval),
       maxInvites: null,
     })
     setInviteTalentIds(ids)

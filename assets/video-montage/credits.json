@@ -1,0 +1,14 @@
+{
+  "author": "Twitter, Inc and other contributors",
+  "project": "Twemoji",
+  "version": "14.0.2",
+  "license": "CC BY 4.0",
+  "license_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source": "https://github.com/twitter/twemoji/tree/v14.0.2/assets/72x72",
+  "asset_codes": [
+    "1f42d",
+    "2728",
+    "1f31f"
+  ],
+  "modifications": "Scaled, feathered and alpha-composited on video."
+}

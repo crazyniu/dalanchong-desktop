@@ -196,7 +196,7 @@ pub async fn update_install(app: AppHandle, webview: Webview) -> Result<Value, S
         let tasks = app.state::<crate::Tasks>();
         let tasks = tasks.0.lock().unwrap();
         if !tasks.is_empty() {
-            return Err("请等待采集或邀约任务结束".into());
+            return Err("请等待采集、邀约或视频混剪任务结束".into());
         }
         // Publish while Tasks remains locked so a concurrent start cannot slip between
         // the empty-task decision and set_task_state's installing check.

@@ -1,15 +1,16 @@
 /**
  * AI module map
- * Purpose: manage named browser accounts and launch independent Google Chrome profiles.
+ * Purpose: manage named browser accounts and launch independent dedicated Chromium profiles.
  * Entry: WorkbenchPage is /workbench; native chrome_* commands own metadata and profiles.
  * Flow: load account records, open a browser or existing window,
  * and save/edit/remove records through main-only IPC. Chrome owns tabs and bookmarks.
- * State: cards show account names and last-opened times from workbench.json;
- * dialogs and launch progress are UI-only.
+ * State: cards show fixed account numbers, names and last-opened times from workbench.json;
+ * dialogs are local; shop-browser.ts owns per-account opening and install progress
+ * across routes. The shared overlay presents download/install feedback without a modal.
  * With no browsers, the centered empty state owns creation; populated grids use the toolbar.
- * The controlled form edits only the account name. Native chrome.rs owns validation,
+ * The controlled form edits the account name and default browser screen percentage. Native chrome.rs owns validation,
  * metadata persistence and browser launch; renaming preserves the profile and open window.
- * A missing Chrome installation exposes the official download page through an error-toast action.
+ * Only the account being opened disables its card actions; forms retain save/delete protection.
  * The auto-fill grid retains card width for small lists and adapts to the content area.
  * Invariants: no invitation accounts/tasks are changed. Opening is not proof of login;
  * show last-opened time only. Preview cannot launch a real browser or simulate success.
@@ -37,6 +38,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Card, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
@@ -59,26 +61,22 @@ import { LoadingState } from '@/components/ui/loading-state'
 import { browserError } from './browser-session'
 import { desktop } from './desktop'
 import { formatTime } from './format'
+import { Choice } from './shared'
+import { openShopBrowser, useShopBrowser, type ChromeAccount } from './shop-browser'
 
-type ChromeAccount = {
-  id: string
-  number: number
-  name: string
-  lastOpenedAt: string | null
-}
-type AccountForm = Pick<ChromeAccount, 'name'> & { id?: string }
+type AccountForm = Pick<ChromeAccount, 'name' | 'windowScale'> & { id?: string }
 
 export function WorkbenchPage() {
   const [accounts, setAccounts] = useState<ChromeAccount[]>([])
   const [loading, setLoading] = useState(Boolean(desktop))
   const [error, setError] = useState('')
   const [reload, setReload] = useState(0)
-  const [opening, setOpening] = useState('')
+  const opening = useShopBrowser((state) => state.opening)
   const [form, setForm] = useState<AccountForm | null>(null)
   const [saving, setSaving] = useState(false)
   const [removing, setRemoving] = useState<ChromeAccount | null>(null)
   const [deleting, setDeleting] = useState(false)
-  const busy = Boolean(opening) || saving || deleting
+  const busy = saving || deleting
 
   useEffect(() => {
     if (!desktop) return
@@ -98,44 +96,25 @@ export function WorkbenchPage() {
       : [...current, account])
   }
   async function openAccount(account: ChromeAccount) {
-    setOpening(account.id)
-    try {
-      updateAccount(await invoke<ChromeAccount>('chrome_open', { id: account.id }))
-    } catch (reason) {
-      const message = browserError(reason)
-      if (message === '未找到 Google Chrome，请先安装正式版 Chrome') {
-        toast.error(message, {
-          action: {
-            label: '下载 Chrome',
-            onClick: () => {
-              void invoke('browser_open_external', { url: 'https://www.google.cn/chrome/' })
-                .catch((error) => toast.error(browserError(error)))
-            },
-          },
-        })
-      } else {
-        toast.error(message)
-      }
-    } finally {
-      setOpening('')
-    }
+    const opened = await openShopBrowser(account.id)
+    if (opened) updateAccount(opened)
   }
   function addAccount() {
-    setForm({ name: '' })
+    setForm({ name: '', windowScale: 80 })
   }
   return (
     <main className='relative flex h-svh min-h-0 min-w-0 flex-col bg-muted/30'>
       {accounts.length > 0 && (
         <div className='workspace-toolbar shrink-0'>
           <div className='page-toolbar flex-wrap'>
-            <h1 className='text-2xl font-semibold'>多店铺</h1>
+            <h1 className='text-2xl font-semibold'>多店铺管理</h1>
             <Button className='ml-auto' disabled={!desktop || loading || busy} onClick={addAccount}><Plus />新建店铺</Button>
           </div>
         </div>
       )}
       <div className={`min-h-0 flex-1 overflow-y-auto ${accounts.length ? 'px-5 pt-3 pb-6' : ''}`}>
         {!desktop ? (
-          <div className='grid h-full min-h-64 place-content-center text-muted-foreground'>请在桌面程序中使用多店铺</div>
+          <div className='grid h-full min-h-64 place-content-center text-muted-foreground'>请在桌面程序中使用多店铺管理</div>
         ) : loading ? (
           <LoadingState label='正在加载店铺…' className='h-full' />
         ) : error ? (
@@ -160,11 +139,11 @@ export function WorkbenchPage() {
                   <CardHeader className='flex min-h-6 flex-row items-start justify-between gap-3 px-5'>
                     <CardTitle className='min-w-0 flex-1 text-base leading-6'>
                       <h2 className='flex min-w-0 items-start gap-2.5'>
-                        <Store className='mt-0.5 size-5 shrink-0 text-muted-foreground' aria-hidden='true' />
+                        <Badge variant='secondary' className='shrink-0 tabular-nums'>#{account.number}</Badge>
                         <button
                           type='button'
                           className='min-w-0 flex-1 rounded-sm text-left no-underline outline-none hover:no-underline focus:no-underline focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50'
-                          disabled={busy}
+                          disabled={busy || opening.includes(account.id)}
                           onClick={() => void openAccount(account)}
                           title={account.name}
                           aria-label={`打开店铺「${account.name}」`}
@@ -175,14 +154,14 @@ export function WorkbenchPage() {
                     </CardTitle>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant='ghost' size='icon' className='-mt-1 -mr-2' disabled={busy} aria-label={`店铺「${account.name}」的操作`}><MoreHorizontal /></Button>
+                        <Button variant='ghost' size='icon' className='-mt-1 -mr-2' disabled={busy || opening.includes(account.id)} aria-label={`店铺「${account.name}」的操作`}><MoreHorizontal /></Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align='end'>
-                        <DropdownMenuItem onClick={() => setForm({ id: account.id, name: account.name })}>
-                          <Pencil />编辑名称
+                        <DropdownMenuItem disabled={busy || opening.includes(account.id)} onClick={() => setForm({ id: account.id, name: account.name, windowScale: account.windowScale })}>
+                          <Pencil />编辑店铺
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem variant='destructive' onClick={() => setRemoving(account)}><Trash2 />删除店铺</DropdownMenuItem>
+                        <DropdownMenuItem variant='destructive' disabled={busy || opening.includes(account.id)} onClick={() => setRemoving(account)}><Trash2 />删除店铺</DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </CardHeader>
@@ -193,9 +172,9 @@ export function WorkbenchPage() {
                         {account.lastOpenedAt ? <time dateTime={account.lastOpenedAt}>{formatTime(account.lastOpenedAt)}</time> : '尚未打开'}
                       </dd>
                     </dl>
-                    <Button variant='outline' disabled={busy} onClick={() => void openAccount(account)} aria-label={`打开店铺「${account.name}」`}>
-                      {opening === account.id ? <LoaderCircle className='animate-spin' /> : <ArrowUpRight />}
-                      {opening === account.id ? '正在打开' : '打开'}
+                    <Button variant='outline' disabled={busy || opening.includes(account.id)} onClick={() => void openAccount(account)} aria-label={`打开店铺「${account.name}」`}>
+                      {opening.includes(account.id) ? <LoaderCircle className='animate-spin' /> : <ArrowUpRight />}
+                      {opening.includes(account.id) ? '正在打开' : '打开'}
                     </Button>
                   </CardFooter>
                 </Card>
@@ -208,7 +187,7 @@ export function WorkbenchPage() {
         <DialogContent showCloseButton={!saving} className='flex max-h-[85svh] flex-col gap-0 overflow-hidden p-0 sm:max-w-md'>
           <DialogHeader className='shrink-0 px-6 pt-6 pb-5 sm:text-center'>
             <DialogTitle>{form?.id ? '编辑店铺' : '新建店铺'}</DialogTitle>
-            <DialogDescription className='sr-only'>设置店铺名称</DialogDescription>
+            <DialogDescription className='sr-only'>设置店铺名称和浏览器默认尺寸</DialogDescription>
           </DialogHeader>
           {form && (
             <form className='flex min-h-0 flex-col' onSubmit={async (event) => {
@@ -219,7 +198,7 @@ export function WorkbenchPage() {
                 const account = await invoke<ChromeAccount>('chrome_save_account', { input: form })
                 updateAccount(account)
                 setForm(null)
-                if (adding) await openAccount(account)
+                if (adding) void openAccount(account)
               } catch (reason) {
                 toast.error(browserError(reason))
               } finally {
@@ -230,6 +209,17 @@ export function WorkbenchPage() {
                 <div className='space-y-2'>
                   <Label htmlFor='workbench-name'>店铺名称</Label>
                   <Input id='workbench-name' value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder='输入店铺名称' required autoFocus disabled={saving} />
+                </div>
+                <div className='space-y-2'>
+                  <div className='text-sm font-medium'>浏览器默认尺寸</div>
+                  <Choice
+                    label='浏览器默认尺寸'
+                    className='w-full'
+                    value={String(form.windowScale)}
+                    onChange={(value) => setForm({ ...form, windowScale: Number(value) })}
+                    options={[60, 70, 80, 90].map((value) => ({ value: String(value), label: `${value}%` }))}
+                    disabled={saving}
+                  />
                 </div>
               </div>
               <DialogFooter className='shrink-0 border-t px-6 py-4'>

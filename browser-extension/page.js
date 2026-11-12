@@ -2,9 +2,9 @@
  * AI module map
  * Purpose: MAIN-world Douyin detail reader and original-file probe helper.
  * Entry: manifest injection exposes window.__douyinOriginal to background.js injected calls.
- * Flow: bootstrap data, React Flight records, and observed work API responses populate a bounded detail cache; normalized formats and probe requests support platform analysis.
- * State: the cache keeps only download fields for the latest 100 works; probe resources belong to the current document and the background observes cross-origin redirect addresses.
- * Invariants: keep the site's own fetch/XHR responses and SDK call chain intact; select formats using the existing resolution, bitrate, and address ordering.
+ * Flow: bootstrap data, React Flight records, and observed work API responses populate a bounded detail cache; complete MP4 addresses also supply available-quality batch results, while the bound player's definition selects current-quality downloads.
+ * State: the cache keeps only download fields for the latest 100 works; probe resources belong to the current document. Original probes revalidate platform scheduling, and the background observes cross-origin redirect addresses.
+ * Invariants: keep the site's own fetch/XHR responses and SDK call chain intact; current-quality selection uses the active player gear and quality type.
  * Boundary: no chrome APIs or extension storage are available in this execution world.
  */
 (() => {
@@ -22,17 +22,18 @@
       const key = String(id);
       videos.delete(key);
       // API/bootstrap objects include unrelated author, recommendation and image data.
-      // Retain only the fields consumed by getDetail and selectHD below.
+      // Retain only the fields consumed by original, batch and current-quality readers.
       videos.set(key, {
         title: value.desc, author: value.author?.nickname,
         imagePost: Boolean(value.images?.length || value.imageInfos?.length),
         videoId: address?.uri, needCookie: Boolean(video.is_need_set_cookie),
         width: video.width || address?.width || 0, height: video.height || address?.height || 0,
+        play_addr: address && {url_list: address.url_list, width: address.width, height: address.height},
         rates: (video.bit_rate || video.bitRateList || []).map(rate => {
           const play = rate.play_addr || rate.playAddr;
-          return {format: rate.format, gear_name: rate.gear_name, bit_rate: rate.bit_rate,
-            play_addr: play && {url_list: play.url_list, data_size: play.data_size || play.dataSize,
-              width: play.width, height: play.height}};
+          return {format: rate.format, gear_name: rate.gear_name, quality_type: rate.quality_type,
+            bit_rate: rate.bit_rate,
+            play_addr: play && {url_list: play.url_list, width: play.width, height: play.height}};
         })
       });
       if (videos.size > 100) videos.delete(videos.keys().next().value);
@@ -98,12 +99,17 @@
       xhr.withCredentials = true;
       xhr.timeout = 12000;
       xhr.onload = () => {
+        const diagnostic = {workId: id, endpoint: '/aweme/v1/web/aweme/detail/',
+          httpStatus: xhr.status, contentType: xhr.getResponseHeader('content-type') || ''};
+        console.info('[大懒虫视频] 详情接口响应', diagnostic);
         if (xhr.status !== 200) {
           reject(new Error(`详情接口返回 HTTP ${xhr.status}，请在抖音页面完成验证后重试。`));
           return;
         }
         try {
           const data = JSON.parse(xhr.responseText);
+          console.info('[大懒虫视频] 详情接口结果', {...diagnostic, statusCode: data.status_code,
+            message: data.status_msg, hasDetail: Boolean(data.aweme_detail), hasVideo: Boolean(data.aweme_detail?.video)});
           if (data.status_code === 2483 || /请先登录|用户未登录/.test(data.status_msg || "")) {
             throw new Error("抖音要求登录，请先在当前页面登录。 ");
           }
@@ -127,29 +133,22 @@
     if (item.imagePost) {
       throw new Error("当前作品是图文，本插件目前只处理普通视频。 ");
     }
-    const uri = item.videoId;
-    if (!uri) throw new Error("详情中没有视频内部 ID，无法探测原片。 ");
-    const rates = item.rates;
+    const formats = item.rates.filter(rate => rate.format === 'mp4').map(rate => ({
+      address: rate.play_addr, bitrate: rate.bit_rate || 0
+    }));
+    formats.push({address: item.play_addr, bitrate: 0});
     return {
-      awemeId: id, videoId: uri, title: item.title || id,
+      awemeId: id, videoId: item.videoId, title: item.title || id,
       author: item.author || "", needCookie: item.needCookie,
-      transcodeSize: Math.max(0, ...rates.map(rate => Number(rate.play_addr?.data_size || 0))),
-      hd: selectHD(rates),
-      width: item.width, height: item.height
+      width: item.width, height: item.height,
+      // DASH entries are excluded: batch alternatives must remain complete files.
+      formats: formats.filter(format => format.address?.url_list?.length).map(({address, bitrate}) => {
+        const width = address.width || 0, height = address.height || 0;
+        const definition = Math.min(width, height);
+        return {urls: address.url_list, width, height, bitrate,
+          quality: definition ? `${definition}p` : '可用清晰度'};
+      }).sort((a, b) => Math.min(b.width, b.height) - Math.min(a.width, a.height) || b.bitrate - a.bitrate)
     };
-  }
-
-  // Preserve the supplied plugin's format ordering: MP4 resolution, then bitrate, then shortest URL within a tier.
-  function selectHD(rates) {
-    const candidates = rates.filter(rate => rate.format === "mp4" && rate.play_addr?.url_list?.length)
-      .map(rate => {
-        const address = rate.play_addr;
-        const gear = rate.gear_name || "";
-        const resolution = [1440, 1080, 720, 540, 480, 360].find(value => gear.includes(String(value)))
-          || (gear.includes("4_") ? 2160 : Number(gear.match(/(\d{3,4})/)?.[1]) || Math.min(address.width || 0, address.height || 0));
-        return {url: address.url_list.slice().sort((a, b) => a.length - b.length)[0], resolution, bitRate: rate.bit_rate || 0};
-      }).sort((a, b) => b.resolution - a.resolution || b.bitRate - a.bitRate);
-    return candidates[0] || null;
   }
 
   function startProbe(videoId, needCookie) {
@@ -162,9 +161,87 @@
     probe.open("GET", `/aweme/v1/play/?${params}`);
     probe.withCredentials = true;
     probe.timeout = 12000;
+    // Re-resolving an unavailable CDN must reach the platform scheduler again.
+    probe.setRequestHeader("Cache-Control", "no-cache");
     probe.setRequestHeader("Range", "bytes=0-0");
     probe.send();
   }
 
-  window.__douyinOriginal = {getDetail, startProbe, stopProbe: () => probe?.abort()};
+  function getCurrentIdentity() {
+    const video = [...document.querySelectorAll('video')].filter(v => {
+      const rect = v.getBoundingClientRect();
+      return rect.width > 100 && rect.height > 100 && rect.bottom > 0 && rect.top < innerHeight &&
+        rect.right > 0 && rect.left < innerWidth;
+    }).sort((a, b) => Number(a.paused) - Number(b.paused) || b.clientWidth * b.clientHeight - a.clientWidth * a.clientHeight)[0];
+    if (!video) return null;
+    // Only a player actually owning this video can identify its active quality.
+    const definition = window.player?.video === video ? window.player.curDefinition : null;
+    const params = new URLSearchParams(location.search);
+    return {
+      awemeId: params.get('modal_id') || params.get('vid') || location.pathname.match(/^\/video\/(\d+)/)?.[1],
+      source: video.currentSrc || video.src,
+      width: video.videoWidth, height: video.videoHeight,
+      definitionId: definition?.vid == null ? null : String(definition.vid),
+      gearName: definition?.gearName || '', qualityType: definition?.qualityType ?? null,
+      vtype: definition?.vtype || ''
+    };
+  }
+
+  async function getCurrent() {
+    const identity = getCurrentIdentity();
+    if (!identity) throw new Error('请先播放当前视频。');
+    const id = identity.awemeId;
+    const direct = /^https?:/.test(identity.source) && identity.vtype !== 'DASH';
+    const identified = identity.definitionId === id && identity.gearName && identity.qualityType != null;
+    if (!direct && !identified) {
+      throw new Error('尚未识别当前播放档位，请播放视频后再下载。');
+    }
+    if (!videos.has(id)) {
+      if (direct) {
+        // Alternate CDNs are optional for an already playable complete address.
+        try { await getDetail(id); }
+        catch {
+          return {url: identity.source, urls: [identity.source], title: document.title, currentIdentity: identity};
+        }
+      } else await getDetail(id);
+    }
+    const item = videos.get(id);
+    // DASH definitions point to video-only tracks. The work API provides a complete
+    // MP4 for that same gear and quality type; dimensions alone cannot distinguish gears.
+    const formats = item.rates.filter(rate => rate.format === 'mp4' && rate.play_addr?.url_list?.length);
+    let matches;
+    if (identified) {
+      matches = formats.filter(rate => rate.gear_name === identity.gearName &&
+        Number(rate.quality_type) === Number(identity.qualityType));
+    } else {
+      // Known file paths survive CDN hosts and signatures; play API endpoints do
+      // not identify a file by pathname alone. Keep quality selectors in the key.
+      const mediaPath = value => {
+        const url = new URL(value);
+        const start = url.pathname.indexOf('/video/tos/');
+        if (start < 0) return null;
+        const quality = ['quality', 'ratio', 'format', 'watermark'].map(key => `${key}=${url.searchParams.get(key) || ''}`).join('&');
+        return `${url.pathname.slice(start)}?${quality}`;
+      };
+      const currentPath = mediaPath(identity.source);
+      if (item.play_addr?.url_list?.length) formats.push({play_addr: item.play_addr});
+      const matched = formats.find(rate => rate.play_addr.url_list.some(url =>
+        url === identity.source || (currentPath && mediaPath(url) === currentPath)));
+      matches = matched ? [matched] : [];
+    }
+    const urls = [...new Set([...(direct ? [identity.source] : []),
+      ...matches.flatMap(rate => rate.play_addr.url_list)].filter(url => /^https?:/.test(url)))];
+    if (!urls.length) throw new Error('当前播放档位没有完整 MP4 地址，请切换清晰度后再下载。');
+    return {url: direct ? identity.source : urls[0], urls, title: item.title || id, currentIdentity: identity};
+  }
+
+  // The isolated controls request a synchronous state snapshot for their existing
+  // refresh timer. This DOM value schedules reads only; the worker resolves the
+  // trusted source again through getCurrent before creating any download.
+  document.addEventListener('dalanchong-read-current-quality', () => {
+    const identity = getCurrentIdentity();
+    document.documentElement.dataset.dalanchongCurrentQuality = identity ? JSON.stringify(identity) : '';
+  });
+
+  window.__douyinOriginal = {getDetail, getCurrent, getCurrentIdentity, startProbe, stopProbe: () => probe?.abort()};
 })();

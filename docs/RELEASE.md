@@ -15,13 +15,17 @@
 - `pnpm package:win`：在 Windows x64 生成 NSIS 安装包及更新签名。
 - 产物在 `dist-release/tauri/<系统>/<架构>/`。
 
-「多店铺」使用本机正常安装的 Google Chrome Stable。macOS 查找系统与用户 Applications 目录，Windows 查找标准 Chrome 安装目录；未安装时引导至 [Google 中国官方下载页](https://www.google.cn/chrome/)。浏览器版本与更新由 Chrome 自身管理。
+「多店铺管理」使用软件内按需下载的官方 Ungoogled Chromium。`browser-runtime/engine.json` 固定各平台的官方发行版本、下载地址、SHA-256 与 Mac 应用身份，由 Rust 内嵌读取。主包只包含实现代码与内嵌清单、图标、entitlements、许可证；浏览器二进制由用户点击打开店铺时下载，不进入桌面安装包或更新包。开发版和正式版采用同一运行时安装流程，从 GitHub 官方发行直链下载预编译 DMG／ZIP并核对官方 SHA-256；Mac 本机改名与签名属于安装处理，不编译浏览器源码。
 
-Chrome 账号数据位于 `assistant-data/chrome-profiles/<UUID>/`，账号列表保存 UUID、编号、名称与最近打开时间。首次使用账号时在网页完成登录，后续使用同一目录。浏览器数据保留在用户本机。`src-tauri/target/` 为 Rust/Tauri 构建产物，`dist-release/` 为交付文件，均不入 Git；源码配置、`Cargo.lock`、`pnpm-lock.yaml` 和 `release-notes/` 保留在仓库。
+运行时先检查 `assistant-data/browser-runtime/<version>-<sha>-<branding>/`，缺少内核时在软件内显示阶段和下载进度，核对 SHA-256 后安装。Mac 从官方 DMG 只读提取并设置独立应用名称、Bundle ID、图标，以本机 ad-hoc 方式由内到外签名；该本机浏览器签名不能描述为 Developer ID 或公证。Windows 解压官方 ZIP。完整目录发布后继续打开店铺，运行时不依赖 Node、Python、clang 或系统 Chrome。
 
-视频插件唯一源码位于本仓库的 `browser-extension/`。`scripts/package.mjs` 自动调用 `scripts/prepare-video-extension.mjs`，先同步插件版本，再将插件完整复制到 `.work/video-extension/` 并生成 `.work/video-extension.sha256`，作为 `video-extension/` 和 `video-extension.sha256` 加入本次 Tauri 打包配置，保留插件源码、依赖资源、来源说明与许可证。这些生成资源不入 Git，不直接修改。
+账号资料使用独立的 `assistant-data/chromium-profiles/<UUID>/`。店铺 UUID、编号、名称与最近打开时间保留；专用内核首次需重新登录。`assistant-data/chrome-profiles/` 仅保留其中用户数据，不读取、覆盖或删除，也不自动导入 Cookie。浏览器程序、账号资料和视频插件程序资源分别保存。`src-tauri/target/` 为 Rust/Tauri 构建产物，`dist-release/` 为交付文件，均不入 Git；源码配置、`Cargo.lock`、`pnpm-lock.yaml` 和 `release-notes/` 保留在仓库。
 
-正式运行从包内按源码哈希同步到固定的 `assistant-data/browser-extensions/video-downloader/`。Chrome 启动后通过浏览器级 `Extensions.getExtensions`／`Extensions.loadUnpacked` 自动加载该固定路径，已加载时复用。各账号的扩展数据保存在自己的 Chrome profile，插件程序资源与账号数据分开。应用内升级安装前会关闭受管理浏览器，关闭失败则停止安装。视频功能只修改 [插件源码](VIDEO_SOURCES.md)，安装和资源说明以该文档为准，不修改发布资源或用户运行目录。
+视频插件唯一维护源码位于本仓库的 `browser-extension/`，开发时直接加载该目录；维护源码保持可读，禁止压缩、混淆或加密。CRX 等分发包需要混淆时，也必须先复制到生成目录，仅处理副本，禁止回写源码。`scripts/package.mjs` 调用 `scripts/prepare-video-extension.mjs`，同步版本并将运行资源复制到 `.work/video-extension/`；使用固定依赖 esbuild 0.27.1 逐文件压缩自有 JS 的空白和局部标识符，再计算 `.work/video-extension.sha256`。`vendor/` 与许可证目录保持原样，不打包 source map、维护 Markdown 或私钥，保留 `THIRD_PARTY_NOTICES.md`、许可证及 LEGAL 资源；不修改开发源码。生成目录和指纹仍映射为 Tauri 的 `video-extension/`、`video-extension.sha256`，不入 Git、不直接维护。
+
+esbuild 使用 `target: chrome116`、`minifyWhitespace: true`、`minifyIdentifiers: true`、`minifySyntax: false`、`keepNames: false`、`sourcemap: false`、`legalComments: inline`；保持文件路径与导入，不 bundle、不改属性名、不删除 Console，不引入 eval 或远程脚本。此步骤是 JS 压缩和局部标识符混淆，不能描述为源码加密。
+
+正式运行从包内按处理后资源的哈希同步到固定的 `assistant-data/browser-extensions/video-downloader/`。专用 Chromium 启动后通过浏览器级 `Extensions.getExtensions`／`Extensions.loadUnpacked` 自动加载该固定路径，已加载时复用。各账号的扩展数据保存在自己的 Chromium profile，插件程序资源与账号数据分开。应用内升级安装前会关闭受管理浏览器，关闭失败则停止安装。视频功能只修改 [插件源码](VIDEO_SOURCES.md)，安装和资源说明以该文档为准，不修改发布资源或用户运行目录。
 
 本机更新签名私钥在忽略目录 `.local/tauri-signing/updater.key`。该文件必须妥善备份；不能删除后为已发布版本随意换公钥。正式发布通过 `TAURI_SIGNING_PRIVATE_KEY` 提供对应私钥，密码通过 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 提供。公钥在 `src-tauri/tauri.conf.json`，不是秘密。
 
@@ -38,7 +42,7 @@ Mac 公证发布路径使用 Developer ID 签名并公证，需要 APPLE_SIGNING
 用户要求发布已构建版本时，运行 `publish-artifacts.yml`，填写成功构建的 `run_id` 和对应版本 `tag`（例如 `v0.3.2`）；所选构建的 `source_ref` 须与该次运行的 `head_sha` 相同。该流程复用已有产物，不重复构建，也不补做 Developer ID 签名或公证。
 
 1. 从指定成功构建取得 `release-darwin-arm64` 和 `release-win32-x64`，使用原构建的源码 SHA 创建版本 tag。
-2. 检查版本与中文更新说明，并核对两个目标的文件、大小、哈希和 Tauri 更新签名文件。
+2. 检查版本与中文更新说明，并核对两个目标的安装文件、大小、哈希和 Tauri 更新签名文件。
 3. 将同一批附件及中文说明发布到 Gitee 和 GitHub；完整上传并核对附件后更新 `updates/tauri/latest.json`。
 
 该发布任务使用 Windows runner，最长运行 35 分钟，优先上传 Windows 安装包。发布中断后再次运行时，复用已有 GitHub 草稿和 Gitee 版本，核对已有附件并继续上传缺失文件；匿名下载核对使用 curl，单个附件最长 3 分钟。下载内容与本次产物不一致时停止，不覆盖同名附件。

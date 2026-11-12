@@ -1,104 +1,83 @@
 /**
  * AI module map
- * Purpose: MAIN-world video candidate discovery on supported commerce pages.
- * Entry: manifest injection; a window marker reuses the installed scanner.
- * Flow: DOM players and performance entries become professional-video-capture window messages for bridge.js.
- * State: document-local signatures deduplicate records and reset when the source location changes; observers batch only changed player subtrees.
- * Invariants: candidates require background verification before display; ordinary MediaSource buffers are not downloadable file records.
- * Side effects: observes DOM, performance, and playback events; no chrome APIs are available here.
+ * Report actual webpage video playback from the isolated content-script world.
+ * CAPTURE_MEDIA carries the HTTP(S) currentSrc, dimensions and readyState only after
+ * a video has played and decoded a frame; the background saves that playback directly
+ * and merges its dimensions with complete-video records observed in network responses.
+ * Blob URLs, playlists and segments are not downloadable complete-video reports.
+ * Observe document and discovered open shadow roots without patching browser APIs.
+ * Runs in HTTP(S) documents and frames; the background owns the real top-level tab.
+ * Only in-flight reports are coalesced here; the background owns successful
+ * deduplication, including releasing it when the user clears the video list.
  */
 (() => {
-  if (window.__professionalVideoCapture) {
-    window.__professionalVideoCapture.scan(true);
-    return;
+  if (globalThis.__dalanchongVideoCapture) return;
+  globalThis.__dalanchongVideoCapture = true;
+  const pending = new Set();
+  const roots = new Set();
+  const observedRoots = new WeakSet();
+  let timer;
+  const excludedPath = /\.(ts|m4s|m3u8|mpd|vtt|mp3|m4a|aac|wav|flac)(?:$|[?#])/i;
+
+  function publishPlayer(video) {
+    const {currentSrc, videoWidth, videoHeight, readyState} = video;
+    if ((video.paused && video.played.length === 0) || readyState < 2 || videoWidth <= 0 || videoHeight <= 0 ||
+        !/^https?:/.test(currentSrc) || excludedPath.test(currentSrc)) return;
+    const key = `${location.href}:${currentSrc}`;
+    if (pending.has(key)) return;
+    pending.add(key);
+    void chrome.runtime.sendMessage({type: 'CAPTURE_MEDIA', item: {
+      url: currentSrc, title: document.title, sourceUrl: location.href,
+      playback: {currentSrc, videoWidth, videoHeight, readyState}
+    }}).then(() => pending.delete(key), () => pending.delete(key));
   }
-  const known = new Map();
-  const pendingRoots = new Set();
-  let pageURL = location.href;
-  let scanTimer;
-  let refreshCapture = false;
-  const captureSelector = 'video, source[src]';
-  const mediaPath = /\.(mp4|webm|mov|m4v|ogv|m3u8)(?:$|[?#])/i;
-  const publish = (url, title = document.title, extra = {}) => {
-    if (!url || !/^https?:/.test(url)) return;
-    if (location.href !== pageURL) {
-      pageURL = location.href;
-      known.clear();
-    }
-    const kind = extra.kind || (/mpegurl/i.test(extra.contentType || '') || /\.m3u8(?:$|[?#])/i.test(url) ? 'hls' : 'video');
-    const item = {url, title, sourceUrl: location.href, ...extra, kind};
-    const previous = known.get(url);
-    // Repeated player scans need not publish an unchanged URL again.
-    if (previous && extra.quality === '网页视频') return;
-    const signature = JSON.stringify(item);
-    if (previous === signature) return;
-    known.set(url, signature);
-    window.postMessage({source: 'professional-video-capture', item, refresh: refreshCapture}, '*');
-  };
-  function publishResource(entry) {
-    if (mediaPath.test(entry.name)) publish(entry.name, document.title, {quality: '网页视频'});
-  }
-  function publishSource(url, contentType = '') {
-    // MediaSource blobs are player buffers; use network media files or HLS playlists as download sources.
-    if (url.startsWith('blob:')) return;
-    if (/\.(ts|m4s|vtt)(?:$|[?#])/i.test(url) || /mp2t|dash\+xml/i.test(contentType)) return;
-    publish(url, document.title, {...(contentType ? {contentType} : {}), quality: '网页视频'});
-  }
-  function scanElement(node) {
-    if (node.localName === 'video') publishSource(node.currentSrc || node.src);
-    else if (node.localName === 'source' && node.parentElement?.localName === 'video') publishSource(node.src, node.type);
-  }
-  function scanRoot(root, force = false) {
+
+  function scan(root) {
     if (!root.isConnected) return;
-    if (root.nodeType === 1 && root.matches(captureSelector)) scanElement(root, force);
-    for (const node of root.querySelectorAll(captureSelector)) scanElement(node, force);
-  }
-  function scan(force = false) {
-    // Explicit analysis must report fresh observations even when media metadata is unchanged.
-    refreshCapture = force;
-    try {
-      if (force) {
-        known.clear();
-        for (const entry of performance.getEntriesByType('resource')) publishResource(entry);
-      }
-      scanRoot(document, force);
-    } finally {
-      refreshCapture = false;
+    if (root.localName === 'video') publishPlayer(root);
+    for (const player of root.querySelectorAll('video')) publishPlayer(player);
+    const elements = root.nodeType === 1 ? [root, ...root.querySelectorAll('*')] : root.querySelectorAll('*');
+    for (const element of elements) {
+      if (!element.shadowRoot) continue;
+      observeRoot(element.shadowRoot);
+      scan(element.shadowRoot);
     }
   }
-  const scheduleScan = root => {
-    pendingRoots.add(root);
-    if (scanTimer) return;
-    scanTimer = setTimeout(() => {
-      scanTimer = undefined;
-      // A document or parent scan already includes its queued descendants.
-      for (const root of pendingRoots) {
-        let parent = root.parentNode;
-        while (parent && !pendingRoots.has(parent)) parent = parent.parentNode;
-        if (!parent) scanRoot(root);
+
+  function schedule(root) {
+    roots.add(root);
+    if (timer) return;
+    timer = setTimeout(() => {
+      timer = undefined;
+      for (const node of roots) {
+        let parent = node.parentNode;
+        while (parent && !roots.has(parent)) parent = parent.parentNode;
+        if (!parent) scan(node);
       }
-      pendingRoots.clear();
+      roots.clear();
     }, 150);
-  };
-  // Observe lazy loading, episode changes, and source updates without polling every page's players.
-  new MutationObserver(records => {
+  }
+
+  const observer = new MutationObserver(records => {
     for (const record of records) {
-      if (record.type === 'attributes') {
-        if (record.target.matches('video, source')) scheduleScan(record.target);
-      } else {
-        if (record.target.nodeType === 1 && record.target.matches(captureSelector)) scheduleScan(record.target);
-        for (const node of record.addedNodes) if (node.nodeType === 1) scheduleScan(node);
-      }
+      for (const node of record.addedNodes) if (node.nodeType === 1) schedule(node);
     }
-  }).observe(document, {childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'type']});
-  new PerformanceObserver(list => {
-    for (const entry of list.getEntries()) publishResource(entry);
-  }).observe({type: 'resource', buffered: true});
-  const scanPlayer = event => { if (event.target.localName === 'video') scheduleScan(event.target); };
-  document.addEventListener('loadedmetadata', scanPlayer, true);
-  document.addEventListener('play', scanPlayer, true);
-  window.addEventListener('popstate', () => scheduleScan(document));
-  window.__professionalVideoCapture = {scan};
-  if (document.readyState !== 'loading') scan();
-  else document.addEventListener('DOMContentLoaded', () => scan(), {once: true});
+  });
+
+  function observeRoot(root) {
+    if (observedRoots.has(root)) return;
+    observedRoots.add(root);
+    observer.observe(root, {childList: true, subtree: true});
+    // Media readiness events do not cross shadow boundaries, so each root listens.
+    for (const name of ['loadeddata', 'playing']) {
+      root.addEventListener(name, event => {
+        if (event.target.localName === 'video') schedule(event.target);
+      }, true);
+    }
+  }
+
+  observeRoot(document);
+  window.addEventListener('popstate', () => schedule(document));
+  if (document.readyState !== 'loading') scan(document);
+  else document.addEventListener('DOMContentLoaded', () => scan(document), {once: true});
 })();

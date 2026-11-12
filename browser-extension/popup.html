@@ -1,37 +1,34 @@
 <!doctype html>
 <!--
 AI file map
-Purpose: current-page-first Douyin library with scoped selection, quality and batch actions.
-Entry: the extension action opens this document; popup.js reads background-owned media/jobs.
-Boundary: closing the popup leaves downloads running. Element IDs are the controller contract.
+Purpose: action popup listing all captured videos, queuing downloads and opening video tracing.
+Entry: Chrome action loads popup.js; its IDs are the controller contract.
+Flow: preview opens over the current webpage while this list retains its state.
+Boundary: the background owns verified media and downloads within this Chrome profile.
 -->
 <html lang="zh-CN" class="wa-light">
 <head>
-  <meta charset="UTF-8"><title>抖音视频下载 · 大懒虫</title>
-  <link rel="stylesheet" href="theme.css"><link rel="stylesheet" href="player.css"><link rel="stylesheet" href="popup.css">
+  <meta charset="UTF-8">
+  <title>视频下载 · 大懒虫</title>
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <header class="bar">
     <div class="brand"><img src="assets/logo.png" alt=""><strong>大懒虫</strong></div>
-    <button id="open-workspace" class="btn outline" type="button">批量解析<wa-icon name="maximize"></wa-icon></button>
+    <button id="open-workspace" class="btn outline" type="button">视频溯源<wa-icon name="maximize"></wa-icon></button>
   </header>
-  <div class="scope-control" role="group" aria-label="视频范围">
-    <button id="scope-current" type="button" aria-pressed="true">当前网页</button>
-    <button id="scope-all" type="button" aria-pressed="false">全部视频</button>
-  </div>
-  <div id="auto-status" class="auto-status" role="status" aria-live="polite" hidden><wa-spinner></wa-spinner><span id="auto-text"></span></div>
   <div class="list-head">
-    <wa-checkbox id="select-all" disabled><span class="sr-only">选择当前范围全部视频</span></wa-checkbox>
-    <span id="scope-title" class="ellipsis">当前网页</span><span id="page-count" class="counter">0</span><span class="list-gap"></span>
-    <button id="clear" class="btn sm danger" type="button" hidden><wa-icon name="trash-2"></wa-icon>清空全部</button>
+    <wa-checkbox id="select-all" disabled><span class="sr-only">选择全部视频</span></wa-checkbox>
+    <span>视频列表</span><span id="page-count" class="counter">0</span>
+    <span id="selection-count" class="muted"></span>
+    <button id="clear" class="btn sm danger" type="button" disabled><wa-icon name="trash-2"></wa-icon>清空</button>
   </div>
-  <div id="media-list" class="media-list"></div>
+  <main id="media-list" class="media-list" aria-label="捕获的视频"></main>
   <div id="library-status" class="library-status" role="status"><wa-spinner></wa-spinner><span>正在加载视频…</span></div>
-  <div id="empty" class="empty" hidden><wa-icon name="video"></wa-icon><strong>暂无视频</strong></div>
-  <footer id="batch" class="batch" hidden>
-    <span id="batch-summary"></span>
-    <button id="batch-copy" class="btn outline" type="button" disabled><wa-icon name="copy"></wa-icon>复制所选地址</button>
-    <button id="batch-download" class="btn primary" type="button"><wa-icon name="download"></wa-icon><span id="batch-label">全部下载</span></button>
+  <div id="empty" class="empty" hidden><wa-icon name="video"></wa-icon><span>暂无视频</span></div>
+  <footer id="batch-actions" class="batch-actions" hidden>
+    <button id="batch-download" class="btn primary" type="button" disabled><wa-icon name="download"></wa-icon><span id="batch-download-label">全部下载</span></button>
   </footer>
   <script type="module" src="popup.js"></script>
 </body>

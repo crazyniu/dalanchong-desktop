@@ -8,20 +8,24 @@
  * visible until all supplied tasks complete or stop.
  * Invariants: stop identifies a concrete account; presentation never owns runtime jobs.
  * Progress/counts come from runtime tasks, not local timers.
+ * One component timer derives retry seconds from runtime-owned absolute deadlines;
+ * it stops when all deadlines expire and is cleaned up on task changes/unmount.
  * Invitation payloads contain display fields only; task logs and collection filters
  * stay with their owners instead of crossing the native overlay bridge on every tick.
  */
 
+import { useEffect, useState } from 'react'
 import { LoaderCircle, Square } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { PlatformIcon } from './shared'
 import type { Platform, Task } from './types'
+import type { BrowserInstallState } from './shop-browser'
 
 type InviteProgressTask = Pick<Task,
   'accountId' | 'startedAt' | 'processed' | 'total' | 'success' |
-  'skipped' | 'failed' | 'review' | 'current'
+  'skipped' | 'failed' | 'review' | 'current' | 'retryAt'
 >
 export type InviteProgressState = {
   tasks: { name: string; platform: Platform; task: InviteProgressTask }[]
@@ -30,8 +34,9 @@ export type InviteProgressState = {
 export type InviteProgressAction = { type: 'stop'; accountId: string }
 
 export type TaskOverlayContent =
-  | { kind: 'collect'; task: Task }
-  | ({ kind: 'invite' } & InviteProgressState)
+  | { kind: 'collect'; task: Task; browserInstall?: BrowserInstallState | null }
+  | ({ kind: 'invite'; browserInstall?: BrowserInstallState | null } & InviteProgressState)
+  | { kind: 'browser-install'; state: BrowserInstallState }
 
 export function InviteProgress({
   state,
@@ -42,6 +47,24 @@ export function InviteProgress({
   onAction: (action: InviteProgressAction) => void
   className?: string
 }) {
+  const [now, setNow] = useState(Date.now)
+  const retryUntil = state.tasks.reduce(
+    (latest, { task }) => Math.max(latest, task.retryAt ?? 0),
+    0
+  )
+
+  useEffect(() => {
+    if (!retryUntil) return
+    const update = () => {
+      const time = Date.now()
+      setNow(time)
+      if (time >= retryUntil) window.clearInterval(timer)
+    }
+    const timer = window.setInterval(update, 1000)
+    update()
+    return () => window.clearInterval(timer)
+  }, [retryUntil])
+
   const totals = state.tasks.reduce(
     (sum, { task }) => ({
       processed: sum.processed + task.processed,
@@ -91,39 +114,48 @@ export function InviteProgress({
           )}
         </div>
         <div className='max-h-40 space-y-2 overflow-y-auto'>
-          {state.tasks.map(({ name, platform, task }) => (
-            <div key={task.accountId} className='flex items-center gap-3'>
-              <PlatformIcon platform={platform} />
-              <div className='min-w-0 flex-1 text-sm'>
-                <div className='flex items-center gap-2'>
-                  <span className='truncate font-medium' title={name}>
-                    {name}
-                  </span>
-                  {state.tasks.length > 1 && (
-                    <span className='shrink-0 text-muted-foreground tabular-nums'>
-                      {task.processed} / {task.total}
+          {state.tasks.map(({ name, platform, task }) => {
+            const seconds = Math.max(0, Math.ceil(((task.retryAt ?? 0) - now) / 1000))
+            const current = task.retryAt === undefined
+              ? task.current
+              : seconds > 0
+                ? `${task.current}，${seconds} 秒后重试`
+                : '正在重试'
+
+            return (
+              <div key={task.accountId} className='flex items-center gap-3'>
+                <PlatformIcon platform={platform} />
+                <div className='min-w-0 flex-1 text-sm'>
+                  <div className='flex items-center gap-2'>
+                    <span className='truncate font-medium' title={name}>
+                      {name}
                     </span>
-                  )}
+                    {state.tasks.length > 1 && (
+                      <span className='shrink-0 text-muted-foreground tabular-nums'>
+                        {task.processed} / {task.total}
+                      </span>
+                    )}
+                  </div>
+                  <p
+                    className='truncate text-muted-foreground tabular-nums'
+                    title={current}
+                  >
+                    {current}
+                  </p>
                 </div>
-                <p
-                  className='truncate text-muted-foreground'
-                  title={task.current}
+                <Button
+                  size='sm'
+                  variant='outline'
+                  onClick={() =>
+                    onAction({ type: 'stop', accountId: task.accountId })
+                  }
                 >
-                  {task.current}
-                </p>
+                  <Square className='size-3' />
+                  停止
+                </Button>
               </div>
-              <Button
-                size='sm'
-                variant='outline'
-                onClick={() =>
-                  onAction({ type: 'stop', accountId: task.accountId })
-                }
-              >
-                <Square className='size-3' />
-                停止
-              </Button>
-            </div>
-          ))}
+            )
+          })}
         </div>
       </div>
     </section>

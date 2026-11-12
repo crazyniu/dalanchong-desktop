@@ -5,15 +5,22 @@
 # state, and updates. Cargo.lock records resolved versions.
 # WebView snapshots use target-specific AppKit/WebKit and WebView2 APIs plus in-memory base64.
 # Invariants: keep package versions synchronized; do not embed credentials or reintroduce
-# Node/Electron. chrome_runtime.rs locates installed Google Chrome Stable;
+# Node/Electron. chrome_runtime.rs locates the packaged dedicated Chromium engine;
 # chrome.rs launches it with isolated account data for shop workspaces.
 # The existing strip setting documents a host toolchain compatibility issue.
 
 [package]
 name = "dalanchong"
-version = "0.3.4"
+default-run = "dalanchong"
+version = "0.3.5"
 description = "大懒虫电商助手"
 edition = "2021"
+
+# Keep the Mach-O filename ASCII; macOS application metadata owns its Chinese
+# display name in both development and packaged builds.
+[[bin]]
+name = "dalanchong"
+path = "src/main.rs"
 
 [lib]
 name = "dalanchong_lib"
@@ -44,12 +51,12 @@ rusqlite = { version = "0.41.1", features = ["bundled"] }
 core-foundation = "0.10"
 block2 = "0.6.2"
 objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSView", "NSGraphics", "NSGraphicsContext", "objc2-core-graphics"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSView", "NSGraphics", "NSGraphicsContext", "NSBezierPath", "NSColor", "NSFont", "NSAttributedString", "NSStringDrawing", "objc2-core-foundation", "objc2-core-graphics"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSDictionary", "NSError", "NSString"] }
 objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "WKWebView", "WKSnapshotConfiguration", "block2", "objc2-app-kit"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation", "Win32_System_Threading", "Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage"] }
 webview2-com = "0.39.1"
 

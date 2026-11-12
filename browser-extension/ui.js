@@ -1,33 +1,34 @@
 /**
  * AI module map
- * Purpose: shared DOM, media-format, progress, and interaction helpers for the popup and manager.
- * Entry: named exports are consumed by popup.js, manager.js, and player.js.
+ * Purpose: shared DOM, media-format, progress, and interaction helpers for extension pages.
+ * Entry: named exports are consumed by popup.js, manager.js and player.js.
  * Flow: media-record grouping and background runtime replies feed labels, rows, controls, queue actions, and toasts.
  * State: resolution metadata uses a local cache plus res:<id> session entries; at most two hidden video probes run concurrently and release their sources when done or removed from the displayed formats.
- * Boundary: media/jobs remain background-owned; send propagates runtime errors rather than treating them as successful results.
- * readLibrary requires the current snapshot schema; a stale worker offers explicit
- * extension reload instead of assigning missing fields to live UI state.
+ * Boundary: media/jobs remain background-owned; send requires a response and propagates runtime errors rather than treating them as successful results.
+ * readLibrary requires the verified-video/native-queue protocol schema; an older
+ * background offers explicit extension reload before the UI accepts its snapshot.
  * Side effects: DOM construction, clipboard writes, metadata probes, extension storage, and runtime messages.
  */
 // Shared helpers for popup.html and manager.html.
 import {videoGroups} from './media-records.js';
 
 export const $ = id => document.getElementById(id);
-export const jobStates = {queued: '排队中', fetching: '下载中', merging: '合并音视频', saving: '正在保存', complete: '已完成', error: '失败', canceled: '已取消'};
-export const activeStates = ['queued', 'fetching', 'merging', 'saving'];
+const jobStates = {queued: '排队中', fetching: '下载中', complete: '已完成', error: '失败', canceled: '已取消'};
+export const activeStates = ['queued', 'fetching'];
 
 export const sizeText = bytes => !bytes ? '大小未知' : bytes >= 1000 ** 3 ? `${(bytes / 1000 ** 3).toFixed(2)} GB` : bytes >= 1000 ** 2 ? `${(bytes / 1000 ** 2).toFixed(1)} MB` : bytes >= 1000 ? `${(bytes / 1000).toFixed(1)} KB` : `${bytes} B`;
-export const jobFraction = job => ['complete', 'saving'].includes(job.status) ? 1 : job.fraction || (job.size ? job.received / job.size : 0);
+const jobFraction = job => job.status === 'complete' ? 1 : (job.size ? job.received / job.size : 0);
 
 export async function send(message) {
   const result = await chrome.runtime.sendMessage(message);
-  if (result?.error) throw new Error(result.error);
+  if (!result) throw new Error('插件后台未响应，请重新加载插件并刷新网页。');
+  if (result.error) throw Object.assign(new Error(result.error), {code: result.code});
   return result;
 }
 
 export async function readLibrary() {
   const snapshot = await send({type: 'LIST_LIBRARY'});
-  if (snapshot?.schemaVersion !== 1) {
+  if (snapshot?.schemaVersion !== 2) {
     const error = new Error('插件已更新，需要重新加载');
     error.code = 'EXTENSION_RELOAD_REQUIRED';
     throw error;
@@ -61,16 +62,16 @@ export function iconButton(name, label, className = 'btn icon') {
 const resolutions = new Map();
 const probing = new Set();
 const activeProbes = new Map();
-const heightOf = format => format.height || resolutions.get(format.id) || 0;
-const labelKind = {'原片候选': '原片', '高清 MP4': '高清', 'HLS': 'HLS'};
+const heightOf = format => (format.width && format.height ? Math.min(format.width, format.height) : format.height) || resolutions.get(format.id) || 0;
+const labelKind = {'原片候选': '原片'};
 export function qualityText(format) {
   const height = heightOf(format);
   const kind = labelKind[format.quality] || '';
   if (height) return kind ? `${height}P ${kind}` : `${height}P`;
-  if (kind) return kind;
+  if (kind || format.quality) return kind || format.quality;
   return format.kind === 'audio' ? '音轨' : '';
 }
-export const formatText = format => [qualityText(format), sizeText(format.size)].filter(Boolean).join(' · ');
+const formatText = format => [qualityText(format), sizeText(format.size)].filter(Boolean).join(' · ');
 
 export async function loadResolutions() {
   const stored = await chrome.storage.session.get(null);
@@ -81,7 +82,7 @@ let probeQueue = [], probeRunning = 0, probeListener;
 export function probeResolutions(formats, onChange) {
   probeListener = onChange;
   const requested = new Set(formats.map(format => format.id));
-  // Filtering or clearing the list must stop metadata downloads for hidden rows.
+  // Clearing the list must stop metadata downloads for removed rows.
   probeQueue = probeQueue.filter(format => {
     if (requested.has(format.id)) return true;
     probing.delete(format.id);
@@ -137,9 +138,7 @@ export function thumb(item) {
 // One row per work, best resolution first; the chosen quality decides which record the row stands for.
 export function groupedItems(items, chosen) {
   return videoGroups(items).map(group => {
-    // Streams captured from the page's own player add nothing once formats with a known quality exist.
-    const known = group.formats.filter(format => qualityText(format));
-    const formats = (known.length ? known : group.formats).toSorted((a, b) => heightOf(b) - heightOf(a) || (b.size || 0) - (a.size || 0));
+    const formats = group.formats.toSorted((a, b) => heightOf(b) - heightOf(a) || (b.size || 0) - (a.size || 0));
     return {...(formats.find(item => item.id === chosen.get(group.key)) || formats[0]), groupKey: group.key, formats};
   });
 }
@@ -203,7 +202,7 @@ export function downloadState(item, jobsByMedia, onDownload) {
 }
 
 export async function queue(ids) {
-  return send({type: 'QUEUE_DOWNLOADS', ids, threads: 8, mode: 'auto'});
+  return send({type: 'QUEUE_DOWNLOADS', ids});
 }
 
 export function showLibraryError(error, retry) {
