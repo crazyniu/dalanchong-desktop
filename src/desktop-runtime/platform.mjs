@@ -13,8 +13,9 @@
  * from sending. Invitations do not query or gate on remaining quota.
  * Collected profiles retain supported business fields only; contact payloads are omitted.
  * Collection publishes each batch immediately and retains only seen IDs for its total;
- * the caller owns durable rows. Douyin invitation requests use the page's HTTP client,
- * including its live session/security interceptors. Main and small-shop webpack
+ * the caller owns durable rows. Douyin eligibility/product queries use the account
+ * page's fetch; only card sends use its HTTP client and live session/security
+ * interceptors. Main and small-shop webpack
  * loaders are scoped to their live chunk arrays; device values are read per send.
  * Monetary display values use yuan, and unavailable metrics remain absent rather than zero.
  * Never interpret transport uncertainty as confirmed rejection; redact and bound bodies.
@@ -89,7 +90,9 @@ async function pageRequest(platform, path, body, method) {
         .split('; ')
         .find((x) => x.startsWith('ks-s-ctn='))
       if (token) headers['ks-s-ctn'] = decodeURIComponent(token.slice(9))
-    } else if (path.startsWith('/connection/pc/im/')) {
+    } else if (path === '/connection/pc/im/invite/card/send') {
+      // Eligibility and product queries must not initialize the page's HTTP
+      // client or wait on its request interceptors before issuing their fetch.
       // The current shop page and its host use separate webpack runtimes. Bind
       // each known client to its own loader; never call a main-app module ID in
       // the shop runtime or assume either exists during a verification reload.
@@ -127,35 +130,31 @@ async function pageRequest(platform, path, body, method) {
         // Keep non-2xx responses out of the website's error-swallowing interceptor.
         validateStatus: () => true,
       }
-      if (url.pathname === '/connection/pc/im/invite/card/send') {
-        // Match the website's invitation form: await its device report instead of
-        // reading only getNonFxgEcomDid's cached value from an earlier page session.
-        const device = await pageRequire('413497').reportNonFxgEcomDid({ appName: 'buyin' })
-        if (!device?.web_did || !device.ewid)
-          throw Error('设备信息未就绪，请刷新达人广场')
-        const client = window.webviewBridge?.callBrowserWindow
-          ? await window.webviewBridge.callBrowserWindow('getClientInfo')
-          : null
-        body.event_param = {
-          client_form: 'pc',
-          web_did: String(device.web_did),
-          seraph_did: String(device.seraph_did || ''),
-          x_pigeon_did: String(client?.deviceId || ''),
-        }
-        // reportNonFxgEcomDid updates browser storage but not the getter's private
-        // cache. Use this same report for URL and body; the page client preserves
-        // explicit params when adding its own device defaults.
-        options.params.ewid = device.ewid
-        options.params.seraph_did = device.seraph_did
+      // Match the website's invitation form: await its device report instead of
+      // reading only getNonFxgEcomDid's cached value from an earlier page session.
+      const device = await pageRequire('413497').reportNonFxgEcomDid({ appName: 'buyin' })
+      if (!device?.web_did || !device.ewid)
+        throw Error('设备信息未就绪，请刷新达人广场')
+      const client = window.webviewBridge?.callBrowserWindow
+        ? await window.webviewBridge.callBrowserWindow('getClientInfo')
+        : null
+      body.event_param = {
+        client_form: 'pc',
+        web_did: String(device.web_did),
+        seraph_did: String(device.seraph_did || ''),
+        x_pigeon_did: String(client?.deviceId || ''),
       }
+      // reportNonFxgEcomDid updates browser storage but not the getter's private
+      // cache. Use this same report for URL and body; the page client preserves
+      // explicit params when adding its own device defaults.
+      options.params.ewid = device.ewid
+      options.params.seraph_did = device.seraph_did
       // Keep the website's session/signing hooks and verification handling.
       // Preserve HTTP/business failures for our normal parser.
       dispatched = true
       let response
       try {
-        response = method === 'POST'
-          ? await request.v_(url.pathname, body, options)
-          : await request.U2(url.pathname, options)
+        response = await request.v_(url.pathname, body, options)
       } catch (error) {
         if (!error.response) throw error
         response = error.response

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "大懒虫",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "网页视频捕获、批量下载与抖音原画批量解析。",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -30,15 +30,25 @@
   },
   "content_scripts": [
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["capture.js"],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "capture.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true,
       "match_about_blank": true
     },
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["shop-label.js"],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "shop-label.js"
+      ],
       "run_at": "document_idle"
     },
     {
@@ -145,8 +155,13 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["preview.html"],
-      "matches": ["http://*/*", "https://*/*"]
+      "resources": [
+        "preview.html"
+      ],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ]
     },
     {
       "resources": [
