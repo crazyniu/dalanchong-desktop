@@ -17,6 +17,7 @@
 | [多店铺管理](docs/BROWSER.md) | 专用 Chromium、独立账号会话和本机数据 |
 | [性能实现](docs/PERFORMANCE.md) | 网页、任务、存储和视频插件的性能处理与保留边界 |
 | [本地数据库](docs/DATABASE.md) | SQLite 数据位置、增量读写与首次导入 |
+| [插件独立发行](docs/EXTENSION_RELEASE.md) | CRX 签名、产物混淆与 GitHub Release |
 | [发布说明](docs/RELEASE.md) | 打包、签名、更新和发布流程 |
 | [应用图标](assets/icons/README.md) | 图标源文件、已导出资源及重建命令 |
 | [视频插件来源](docs/VIDEO_SOURCES.md) | 唯一源码、安装与许可证 |

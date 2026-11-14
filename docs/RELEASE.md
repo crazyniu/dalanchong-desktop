@@ -70,3 +70,7 @@ Gitee 按 tag 查询返回 HTTP 200 且正文为 `null` 时，表示尚无该版
 ## 单平台线上测试
 
 用户要求测试在线下载时，手动运行 `publish-local-test.yml`，输入已有版本 tag 和用于检测的旧版本号。该流程只在 Windows x64 构建 NSIS 安装包并生成固定 Tauri 更新签名，以 `--targets win32/x64` 校验并发布 Gitee，公开下载核验后才更新 Tauri latest.json。随后在同一 Windows runner 调用 App 原生更新模块检测、下载并验签一次，保存 result.json，不执行安装或重启。Release 正文注明未提供 Windows 代码签名及支持范围。完整发布检查 Mac arm64 和 Windows x64；单平台测试结果仅代表该平台。
+
+## 浏览器插件独立发行
+
+`Browser Extension Release` 工作流用 `extension-v<version>` 标签单独生成 CRX3、处理后的 ZIP、SHA256SUMS 和构建身份信息，发布到 GitHub Release，不触发桌面/Gitee发布。源码保持可读；产物复用现有 esbuild 压缩策略，不是不可逆加密。固定签名密钥、扩展 ID、版本及安装限制见 [插件独立发行](EXTENSION_RELEASE.md)。

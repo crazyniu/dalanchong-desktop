@@ -1,7 +1,8 @@
 /**
  * AI module map
  * Purpose: stage the maintained Chrome extension as native package resources.
- * Entry: package.mjs calls prepareVideoExtension before invoking the Tauri CLI.
+ * Entry: package.mjs calls prepareVideoExtension before Tauri; standalone packaging
+ * supplies its own staging directory and disables source-manifest synchronization.
  * Flow: synchronize the extension version from package.json, copy runtime files
  * into ignored .work, minify owned scripts, hash the staged paths/content, and return
  * Tauri resource mappings consumed by browser_extension.rs in installed builds.
@@ -18,11 +19,13 @@ import { syncVideoExtensionVersion } from './sync-video-extension-version.mjs'
 
 const root = path.resolve(import.meta.dirname, '..')
 
-export async function prepareVideoExtension() {
+export async function prepareVideoExtension({
+  destination = path.join(root, '.work/video-extension'),
+  syncSourceVersion = true,
+} = {}) {
   const source = path.join(root, 'browser-extension')
-  // Version synchronization must precede copying and fingerprinting the resources.
-  await syncVideoExtensionVersion()
-  const destination = path.join(root, '.work/video-extension')
+  // Native packaging retains its source-version hook; standalone builds only change the copy.
+  if (syncSourceVersion) await syncVideoExtensionVersion()
   await mkdir(path.dirname(destination), { recursive: true })
   await rm(destination, { recursive: true, force: true })
   await cp(source, destination, {
@@ -36,10 +39,16 @@ export async function prepareVideoExtension() {
       return !/\.md$/i.test(name) || license
     },
   })
+  // Standalone releases only update the staged manifest, never maintained source.
+  const { version } = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
+  const manifestPath = path.join(destination, 'manifest.json')
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  manifest.version = version
+  await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
   await minifyOwnedScripts(destination)
   const hash = createHash('sha256')
   await hashDirectory(destination, '', hash)
-  const fingerprint = path.join(root, '.work/video-extension.sha256')
+  const fingerprint = destination + '.sha256'
   await writeFile(fingerprint, hash.digest('hex') + '\n')
   return {
     [destination + path.sep]: 'video-extension/',

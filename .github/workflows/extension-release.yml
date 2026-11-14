@@ -1,0 +1,104 @@
+# AI file map
+# Purpose: package the standalone Chromium extension and publish only signed version tags.
+# Entry: extension-v* tag push or manual dispatch against an existing matching tag.
+# Flow: locked dependencies -> minified copy -> fixed-key CRX3/ZIP -> draft release -> publish.
+# Boundary: no desktop/Gitee updates, source rewriting, key generation, or PR secret access.
+name: Browser Extension Release
+on:
+  push:
+    tags: ['extension-v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing extension-vX.Y.Z tag matching package.json
+        required: true
+        type: string
+      publish:
+        description: Publish GitHub Release (otherwise retain Actions artifacts only)
+        default: false
+        type: boolean
+permissions:
+  contents: read
+concurrency:
+  group: extension-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      tag: ${{ steps.source.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Select immutable release tag
+        id: source
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -eu
+          [[ "$RELEASE_TAG" =~ ^extension-v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
+          git checkout --detach "refs/tags/$RELEASE_TAG"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - uses: pnpm/setup@v3
+        with:
+          runtime: node@24
+          version: 11.15.1
+          install: false
+      - run: pnpm install --frozen-lockfile
+      - name: Package signed extension
+        env:
+          RELEASE_TAG: ${{ steps.source.outputs.tag }}
+          EXTENSION_SIGNING_KEY: ${{ secrets.EXTENSION_SIGNING_KEY }}
+          EXTENSION_ID: ${{ vars.EXTENSION_ID }}
+        run: |
+          set -eu
+          test -n "$EXTENSION_SIGNING_KEY" || { echo 'Configure EXTENSION_SIGNING_KEY before CRX release'; exit 1; }
+          test -n "$EXTENSION_ID" || { echo 'Configure fixed EXTENSION_ID before CRX release'; exit 1; }
+          umask 077
+          export EXTENSION_KEY_PATH="$RUNNER_TEMP/extension-signing.pem"
+          trap 'rm -f "$EXTENSION_KEY_PATH"' EXIT
+          printf '%s' "$EXTENSION_SIGNING_KEY" > "$EXTENSION_KEY_PATH"
+          unset EXTENSION_SIGNING_KEY
+          export CHROME_PATH="$(command -v google-chrome)"
+          node scripts/package-browser-extension.mjs --tag "$RELEASE_TAG"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: browser-extension
+          path: dist-release/browser-extension/
+          if-no-files-found: error
+  publish:
+    needs: package
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: browser-extension
+          path: package
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.package.outputs.tag }}
+        run: |
+          set -eu
+          cd package
+          sha256sum -c SHA256SUMS
+          cat > "$RUNNER_TEMP/extension-notes.md" <<'NOTES'
+          浏览器插件独立发行包，源码保留可读；附件 JS 经过空白压缩与局部标识符混淆，不是不可逆加密。
+          CRX 使用固定签名身份；ZIP 可用于浏览器开发者模式加载。包含 SHA256SUMS 和 package-info.json。
+          官方 Chrome 在 Windows/macOS 上限制商店外 CRX 安装；GitHub Release 不保证可直接拖入安装。其他 Chromium 内核按其安装政策使用。
+          本次工作流只打包与发布，不代表真实平台功能验收，不改变桌面/Gitee发布与更新。
+          NOTES
+          if gh release view "$RELEASE_TAG" --json isDraft > "$RUNNER_TEMP/release.json" 2>/dev/null; then
+            test "$(jq -r .isDraft "$RUNNER_TEMP/release.json")" = true || { echo 'Published release is immutable; use a new version'; exit 1; }
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "大懒虫浏览器插件 ${RELEASE_TAG#extension-v}" --notes-file "$RUNNER_TEMP/extension-notes.md"
+          fi
+          gh release upload "$RELEASE_TAG" ./* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest=false

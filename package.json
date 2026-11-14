@@ -15,6 +15,7 @@
     "desktop": "tauri dev",
     "desktop:dev": "tauri dev",
     "test:core": "node --test tests/runner.test.mjs tests/platform.test.mjs tests/diagnostics.test.mjs src/desktop-runtime/runtime.test.mjs",
+    "package:extension": "node scripts/package-browser-extension.mjs",
     "package:mac": "node scripts/package.mjs darwin",
     "package:win": "node scripts/package.mjs win32 x64",
     "icons:build": "node scripts/build-icons.mjs",
